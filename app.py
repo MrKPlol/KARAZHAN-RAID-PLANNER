@@ -7,6 +7,7 @@ Fixes in this version:
   • Correct 2nd-group threshold  (based on exclusive sign-ups, not raw total)
   • Fixed day labels  (Sunday A/B never becomes Monday)
   • Pre-filled R2 buddy groups
+  • SECURITY: Credentials moved out of UI to secrets.toml
 """
 
 from __future__ import annotations
@@ -480,7 +481,7 @@ def build_all_raids(
 # ══════════════════════════════════════════════════════════════════
 
 def discord_block(label: str, players: list) -> str:
-    lines = [f"**{label}**  [{len(players)}/10]", ""]
+    lines = [f"**{label}** [{len(players)}/10]", ""]
     for role in ["Tank", "Healer", "DPS"]:
         rp = [p for p in players if p.role == role]
         if not rp:
@@ -637,29 +638,41 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════
-#  SECRETS
+#  LOAD CREDENTIALS (FROM SECRETS ONLY)
 # ══════════════════════════════════════════════════════════════════
 
 try:
-    default_server = st.secrets.get("RAID_HELPER_SERVER_ID", "")
-    default_key    = st.secrets.get("RAID_HELPER_API_KEY",   "")
+    # We fetch them here, so we don't need text inputs in the UI
+    server_id = st.secrets.get("RAID_HELPER_SERVER_ID", "")
+    api_key   = st.secrets.get("RAID_HELPER_API_KEY",   "")
 except Exception:
-    default_server = ""
-    default_key    = ""
+    # If secrets file is missing or corrupted
+    server_id = ""
+    api_key   = ""
 
 # ══════════════════════════════════════════════════════════════════
 #  SIDEBAR
 # ══════════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.markdown('<div class="sh">🔑 Credentials</div>', unsafe_allow_html=True)
-    server_id = st.text_input("Discord Server ID", value=default_server,
-                               placeholder="123456789012345678")
-    api_key   = st.text_input("Bot API Key", value=default_key, type="password",
-                               placeholder="/apikey show in Discord")
+    # st.markdown('<div class="sh">🔑 Credentials</div>', unsafe_allow_html=True)
+    # --- INPUT FIELDS REMOVED FOR SECURITY ---
+    # server_id = st.text_input("Discord Server ID", value=default_server,
+    #                            placeholder="123456789012345678")
+    # api_key   = st.text_input("Bot API Key", value=default_key, type="password",
+    #                            placeholder="/apikey show in Discord")
 
-    st.markdown("---")
-    demo_mode   = st.checkbox("🧪 Demo Mode", value=not bool(server_id and api_key))
+    # If credentials are empty, we might want to force Demo Mode
+    credentials_missing = not (server_id and api_key)
+
+    st.markdown('<div class="sh">⚙️ General Settings</div>', unsafe_allow_html=True)
+
+    # We use a checkbox for Demo Mode, but if creds are missing, we could disable the uncheck
+    demo_mode = st.checkbox("🧪 Demo Mode", value=credentials_missing,
+                             disabled=credentials_missing,
+                             help="Uses sample data if real API credentials are not set." if not credentials_missing
+                             else "API credentials not found. Demo Mode is forced.")
+
     strict_mode = st.checkbox("Strict status filter", value=True,
                                help="Only primary/confirmed/spec. Uncheck for late/tentative too.")
 
@@ -720,17 +733,14 @@ st.markdown('<div class="sh">📅 Step 1 — Select Your 3 Karazhan Events</div>
 if demo_mode:
     available_events = DEMO_EVENTS
     st.markdown('<div class="ib">🧪 <b>Demo Mode</b> active. '
-                'Uncheck in sidebar to use real Raid-Helper data.</div>',
+                'Sample data is used. (Credentials are missing or Demo is checked).</div>',
                 unsafe_allow_html=True)
 else:
-    if not (server_id and api_key):
-        st.markdown('<div class="wb">⚠️ Enter Server ID and API Key in the sidebar.</div>',
-                    unsafe_allow_html=True)
-        st.stop()
+    # If creds are missing, this block will be skipped due to demo_mode being True
     with st.spinner("Loading events from Raid-Helper..."):
         raw_events = fetch_server_events(server_id, api_key)
     if not raw_events:
-        st.markdown('<div class="wb">❌ No events found. Check your credentials.</div>',
+        st.markdown('<div class="wb">❌ No events found. Your API credentials might be invalid, or something went wrong. Check if your <code>secrets.toml</code> is correct.</div>',
                     unsafe_allow_html=True)
         st.stop()
     _, col_toggle = st.columns([3, 1])
@@ -831,6 +841,7 @@ if "results" not in st.session_state:
 
 results      = st.session_state["results"]
 sel_events   = st.session_state["selected_events"]
+# We get the key used during calculation from session state
 api_key_sess = st.session_state.get("api_key_used", api_key)
 is_demo      = st.session_state.get("demo_mode", demo_mode)
 
@@ -989,6 +1000,7 @@ else:
                     eid    = str(sel_events[i].get("id",""))
                     gdicts = [{"user_id": r.get("Name",""), "name": r.get("Name","")}
                               for r in edited_groups.get(label, [])]
+                    # api_key_sess contains the token used during calculation
                     ok, msg = push_composition(eid, api_key_sess, [gdicts])
                     (successes if ok else errors).append(label if ok else f"{label}: {msg}")
                 if successes:
