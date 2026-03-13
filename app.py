@@ -72,6 +72,16 @@ TARGET         = {"Tank": 1, "Healer": 2, "DPS": 7}
 RAID_SIZE      = 10
 KARA_KEYWORDS  = ["kara", "karazhan", "karaz"]
 
+
+# All valid WoW TBC class names (lowercase) — anything else is junk from Raid-Helper
+VALID_WOW_CLASSES = {
+    "warrior", "paladin", "hunter", "rogue", "priest",
+    "shaman", "mage", "warlock", "druid", "death knight", "dk",
+}
+
+# Status values that mean "I am NOT coming" — always filtered regardless of strict mode
+INVALID_STATUSES = {"absence", "bench", "no", "declined", "absent", "unavailable"}
+
 DEFAULT_BUDDIES = (
     "Ketaminkåre,Tuva\n"
     "Miroga,Terry,Vowly\n"
@@ -213,18 +223,36 @@ def _extract_role(s: dict) -> str:
     return SPEC_ROLE_FALLBACK.get(spec, "DPS")
 
 def parse_signups(event_data: dict, day_idx: int, strict: bool, role_overrides: dict) -> list:
+    """
+    Parse sign-ups for one event/day.
+    Filters out:
+      - Any status in INVALID_STATUSES (absence, bench, declined, …) — always
+      - Any status NOT in the confirmed set (depending on strict mode)
+      - Any entry whose className is not a real WoW class (Absence, empty, junk)
+      - Any entry where ALL role-candidate fields are absent/junk
+    Only days where a player has a truly confirmed sign-up count as available.
+    """
     statuses = STRICT_CONFIRMED if strict else LOOSE_CONFIRMED
     signups  = (event_data.get("signUps") or event_data.get("signups")
                 or event_data.get("players") or [])
     players  = []
     for s in signups:
-        # --- FIX: ABSENCE FILTER ---
-        status = str(s.get("status","")).lower().strip()
-        if status not in statuses or status == "absence":
+        # 1. Status must be confirmed AND not an explicit absence/decline
+        status = str(s.get("status") or "").lower().strip()
+        if status in INVALID_STATUSES:
+            continue
+        if status not in statuses:
             continue
 
+        # 2. className must be a real WoW class (not "Absence", not empty, not junk)
         cls = str(s.get("className") or s.get("class") or "").lower().strip()
-        if cls == "absence" or not cls:
+        # Raid-Helper sometimes puts "Absence" in className even for confirmed entries
+        if not cls or cls not in VALID_WOW_CLASSES:
+            continue
+
+        # 3. entryType / role must not be an absence indicator either
+        entry_type = str(s.get("entryType") or s.get("role") or "").lower().strip()
+        if entry_type in INVALID_STATUSES:
             continue
 
         uid  = str(s.get("userId") or s.get("id") or s.get("discordId") or s.get("name") or "")
@@ -232,17 +260,18 @@ def parse_signups(event_data: dict, day_idx: int, strict: bool, role_overrides: 
         spec = str(s.get("specName") or s.get("spec") or "").strip()
         role = _extract_role(s)
 
-        # --- FIX: ROLE OVERRIDES (Stone=Tank) ---
+        # Role override (e.g. Stone=Tank — he signs up as DPS but tanks)
         override_role = role_overrides.get(name.lower().strip())
         if override_role:
             role = override_role
 
         players.append(Player(
             user_id=uid or name, name=name,
-            class_name=cls or "unknown", spec=spec,
+            class_name=cls, spec=spec,
             role=role, avail_days=[day_idx],
         ))
     return players
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -800,7 +829,9 @@ if st.session_state.get("debug_raw"):
 st.markdown('<div class="sh">🃏 Step 3 — Review & Edit Compositions</div>',
             unsafe_allow_html=True)
 st.markdown('<div class="ib">💡 Change <b>Group</b> to move a player between raids or to bench. '
-            'Change <b>Role</b> to fix a misclassification.</div>', unsafe_allow_html=True)
+            'Change <b>Role</b> to fix a misclassification. '
+            'The <b>✅ Confirmed Days</b> column shows only the days with a real confirmed sign-up '
+            '(absence/tentative/junk entries are already filtered out).</div>', unsafe_allow_html=True)
 
 all_rows = []
 for label in raid_keys + [bench_key]:
@@ -811,7 +842,7 @@ for label in raid_keys + [bench_key]:
             "Spec":      p.spec or "—",
             "Role":      p.role,
             "Group":     label,
-            "Available": ", ".join(DAY_LABELS[d] for d in p.avail_days),
+            "Available": ", ".join(f"{DAY_EMOJI[d]} {DAY_LABELS[d]}" for d in sorted(p.avail_days)),
         })
 
 flat_df       = (pd.DataFrame(all_rows) if all_rows else
@@ -828,7 +859,7 @@ edited_df = st.data_editor(
                          options=["Tank","Healer","DPS"], width="small"),
         "Group":     st.column_config.SelectboxColumn("Group (reassign here)",
                          options=group_options, width="large"),
-        "Available": st.column_config.TextColumn("Available", disabled=True, width="medium"),
+        "Available": st.column_config.TextColumn("✅ Confirmed Days", disabled=True, width="medium"),
     },
     key="player_editor",
 )
