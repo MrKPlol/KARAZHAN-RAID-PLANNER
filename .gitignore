@@ -1,0 +1,12 @@
+# Streamlit spezifische Dateien ignorieren
+.streamlit/config.toml
+.streamlit/secrets.toml
+secrets.toml
+
+# Python Cache-Dateien
+__pycache__/
+*.py[cod]
+
+# Virtuelle Umgebungen (falls vorhanden)
+venv/
+.env
