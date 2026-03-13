@@ -72,16 +72,6 @@ TARGET         = {"Tank": 1, "Healer": 2, "DPS": 7}
 RAID_SIZE      = 10
 KARA_KEYWORDS  = ["kara", "karazhan", "karaz"]
 
-
-# All valid WoW TBC class names (lowercase) — anything else is junk from Raid-Helper
-VALID_WOW_CLASSES = {
-    "warrior", "paladin", "hunter", "rogue", "priest",
-    "shaman", "mage", "warlock", "druid", "death knight", "dk",
-}
-
-# Status values that mean "I am NOT coming" — always filtered regardless of strict mode
-INVALID_STATUSES = {"absence", "bench", "no", "declined", "absent", "unavailable"}
-
 DEFAULT_BUDDIES = (
     "Ketaminkåre,Tuva\n"
     "Miroga,Terry,Vowly\n"
@@ -206,6 +196,51 @@ def filter_events(events: list, show_all: bool) -> list:
     other = sorted([e for e in events if not _is_kara(e)], key=_event_ts, reverse=True)
     return kara + other
 
+def _weekday_info(ts: int) -> tuple:
+    """Returns (emoji, weekday_name) for a Unix timestamp."""
+    try:
+        dt      = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+        weekday = dt.strftime("%A")   # "Sunday", "Monday", …
+        emoji   = next((em for em, lb in zip(DAY_EMOJI, DAY_LABELS)
+                        if lb.lower() == weekday.lower()), "📅")
+        return emoji, weekday
+    except Exception:
+        return "📅", "Unknown"
+
+def make_day_info(selected_events: list) -> dict:
+    """
+    Returns {day_idx: (emoji, weekday_name)} based on real event timestamps.
+    If two events share the same weekday (e.g. 2× Sunday), they both get
+    that weekday name — the A/B suffix is added by the algorithm.
+    Also builds the parse_fixed day_map dynamically so "Stone=Monday"
+    resolves to whichever day_idx has a Monday event.
+    """
+    info: dict = {}
+    for i, e in enumerate(selected_events):
+        em, wd = _weekday_info(_event_ts(e))
+        info[i] = (em, wd)
+    return info
+
+def make_dynamic_day_map(day_info: dict) -> dict:
+    """
+    Maps weekday names → list of day_idx values.
+    Needed so fixed assignments like Stone=Monday still work
+    even if Monday is now day_idx 1 or 2.
+    """
+    dm: dict = {}
+    for idx, (em, wd) in day_info.items():
+        wd_lower = wd.lower()
+        for alias in [wd_lower, wd_lower[:3]]:   # "monday" and "mon"
+            dm.setdefault(alias, [])
+            if idx not in dm[alias]:
+                dm[alias].append(idx)
+    # Also keep numeric aliases
+    for i in range(3):
+        dm[str(i)] = [i]
+    return dm
+
+
+
 
 # ══════════════════════════════════════════════════════════════════
 #  PARSING
@@ -223,36 +258,18 @@ def _extract_role(s: dict) -> str:
     return SPEC_ROLE_FALLBACK.get(spec, "DPS")
 
 def parse_signups(event_data: dict, day_idx: int, strict: bool, role_overrides: dict) -> list:
-    """
-    Parse sign-ups for one event/day.
-    Filters out:
-      - Any status in INVALID_STATUSES (absence, bench, declined, …) — always
-      - Any status NOT in the confirmed set (depending on strict mode)
-      - Any entry whose className is not a real WoW class (Absence, empty, junk)
-      - Any entry where ALL role-candidate fields are absent/junk
-    Only days where a player has a truly confirmed sign-up count as available.
-    """
     statuses = STRICT_CONFIRMED if strict else LOOSE_CONFIRMED
     signups  = (event_data.get("signUps") or event_data.get("signups")
                 or event_data.get("players") or [])
     players  = []
     for s in signups:
-        # 1. Status must be confirmed AND not an explicit absence/decline
-        status = str(s.get("status") or "").lower().strip()
-        if status in INVALID_STATUSES:
-            continue
-        if status not in statuses:
+        # --- FIX: ABSENCE FILTER ---
+        status = str(s.get("status","")).lower().strip()
+        if status not in statuses or status == "absence":
             continue
 
-        # 2. className must be a real WoW class (not "Absence", not empty, not junk)
         cls = str(s.get("className") or s.get("class") or "").lower().strip()
-        # Raid-Helper sometimes puts "Absence" in className even for confirmed entries
-        if not cls or cls not in VALID_WOW_CLASSES:
-            continue
-
-        # 3. entryType / role must not be an absence indicator either
-        entry_type = str(s.get("entryType") or s.get("role") or "").lower().strip()
-        if entry_type in INVALID_STATUSES:
+        if cls == "absence" or not cls:
             continue
 
         uid  = str(s.get("userId") or s.get("id") or s.get("discordId") or s.get("name") or "")
@@ -260,35 +277,42 @@ def parse_signups(event_data: dict, day_idx: int, strict: bool, role_overrides: 
         spec = str(s.get("specName") or s.get("spec") or "").strip()
         role = _extract_role(s)
 
-        # Role override (e.g. Stone=Tank — he signs up as DPS but tanks)
+        # --- FIX: ROLE OVERRIDES (Stone=Tank) ---
         override_role = role_overrides.get(name.lower().strip())
         if override_role:
             role = override_role
 
         players.append(Player(
             user_id=uid or name, name=name,
-            class_name=cls, spec=spec,
+            class_name=cls or "unknown", spec=spec,
             role=role, avail_days=[day_idx],
         ))
     return players
-
 
 
 # ══════════════════════════════════════════════════════════════════
 #  CONFIG PARSERS
 # ══════════════════════════════════════════════════════════════════
 
-def parse_fixed(raw: str) -> dict:
-    day_map = {"sunday":0,"monday":1,"tuesday":2,"sun":0,"mon":1,"tue":2,"0":0,"1":1,"2":2}
+def parse_fixed(raw: str, day_map: dict | None = None) -> dict:
+    """
+    day_map: dynamic {weekday_alias: [day_idx, ...]} from make_dynamic_day_map().
+    Falls back to static Sun=0/Mon=1/Tue=2 if not provided.
+    """
+    if day_map is None:
+        day_map = {"sunday":[0],"monday":[1],"tuesday":[2],
+                   "sun":[0],"mon":[1],"tue":[2],
+                   "0":[0],"1":[1],"2":[2]}
     result: dict = {}
     for line in raw.strip().splitlines():
         if "=" not in line:
             continue
         name, _, day = line.partition("=")
         name = name.strip().lower()
-        day = day.strip().lower()
+        day  = day.strip().lower()
         if name and day in day_map:
-            result[name] = day_map[day]
+            # If multiple slots share a weekday (e.g. 2x Sunday), assign to first one
+            result[name] = day_map[day][0]
     return result
 
 def parse_role_overrides(raw: str) -> dict:
@@ -320,7 +344,7 @@ def parse_buddies(raw: str) -> list:
 #  ALGORITHM
 # ══════════════════════════════════════════════════════════════════
 
-def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups: list) -> dict:
+def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups: list, day_info: dict) -> dict:
     seen: dict = {}
     for day_idx in sorted(players_by_day):
         for p in players_by_day[day_idx]:
@@ -385,7 +409,8 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
     slot_labels: list[tuple] = []
     for day_idx in range(3):
         n = raids_per_day.get(day_idx, 0)
-        em = DAY_EMOJI[day_idx]; dn = DAY_LABELS[day_idx]
+        # Use real weekday from the actual event timestamp
+        em, dn = day_info.get(day_idx, ("📅", f"Day {day_idx}"))
         for slot in range(1, n+1):
             lbl = f"{em} {dn}" if n == 1 else f"{em} {dn} {'AB'[slot-1]}"
             slot_labels.append((day_idx, lbl))
@@ -415,21 +440,44 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             if p.assigned or done >= dps_need: break
             group.append(p); p.assigned = True; p.group_key = label; done += 1
 
-    # Second Pass: Flex
+    # Second Pass: Flex players
+    # Priority order: fixed-day > Tank > Healer > DPS (scarce roles placed first)
     flexible = [p for p in all_players if not p.assigned and len(p.avail_days) > 1]
-    def _need(role: str, label: str) -> int:
+
+    def _need(role, label):
         have = sum(1 for x in results[label] if x.role == role)
         return max(0, TARGET[role] - have)
 
-    flexible.sort(key=lambda p: (0 if p.name_lower in fixed_assignments else 1, 0 if p.role == "Tank" else (1 if p.role == "Healer" else 2)))
+    def _total_free(label):
+        return RAID_SIZE - len(results[label])
+
+    flexible.sort(key=lambda p: (
+        0 if p.name_lower in fixed_assignments else 1,
+        0 if p.role == "Tank" else (1 if p.role == "Healer" else 2),
+    ))
 
     for p in flexible:
-        if p.assigned: continue
-        candidates = [(day_idx, lbl) for day_idx, lbl in slot_labels if day_idx in p.avail_days and len(results[lbl]) < RAID_SIZE]
-        if not candidates: continue
-        candidates.sort(key=lambda entry: (-_need(p.role, entry[1]), len(results[entry[1]])))
+        if p.assigned:
+            continue
+        candidates = [
+            (day_idx, lbl) for day_idx, lbl in slot_labels
+            if day_idx in p.avail_days and _total_free(lbl) > 0
+        ]
+        if not candidates:
+            continue
+        # Recalculated live after each assignment so distribution stays balanced.
+        # 1. Role urgently needed  (higher role-need -> placed first)
+        # 2. Most total spots open (emptier group -> placed first, spreads evenly)
+        # 3. day_idx as stable tiebreak
+        candidates.sort(key=lambda entry: (
+            -_need(p.role, entry[1]),
+            -_total_free(entry[1]),
+            entry[0],
+        ))
         best_day, best_label = candidates[0]
-        results[best_label].append(p); p.assigned = True; p.group_key = best_label
+        results[best_label].append(p)
+        p.assigned  = True
+        p.group_key = best_label
 
     for p in all_players:
         if not p.assigned:
@@ -762,6 +810,12 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
     players_by_day: dict = {}
     debug_raw: dict      = {}
 
+    # Build real weekday info from actual event timestamps
+    day_info    = make_day_info(selected_events)
+    dynamic_map = make_dynamic_day_map(day_info)
+    # Re-parse fixed assignments using the dynamic day map
+    dyn_fixed   = parse_fixed(fixed_raw, dynamic_map)
+
     with st.spinner("Fetching sign-up data..."):
         for day_idx, event in enumerate(selected_events):
             event_data = event if demo_mode else fetch_event_detail(
@@ -769,7 +823,8 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
             if event_data:
                 raw_su = (event_data.get("signUps") or event_data.get("signups")
                           or event_data.get("players") or [])
-                debug_raw[DAY_LABELS[day_idx]] = raw_su[:3]
+                _, wd  = day_info.get(day_idx, ("📅", f"Day {day_idx}"))
+                debug_raw[f"{wd} (slot {day_idx})"] = raw_su[:3]
                 plist = parse_signups(event_data, day_idx, strict_mode, role_overrides)
                 if plist:
                     players_by_day[day_idx] = plist
@@ -779,10 +834,11 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
                     unsafe_allow_html=True)
         st.stop()
 
-    results = build_all_raids(players_by_day, fixed_assignments, buddy_groups)
+    results = build_all_raids(players_by_day, dyn_fixed, buddy_groups, day_info)
     st.session_state.update({
         "results": results, "selected_events": selected_events,
-        "api_key_used": api_key, "demo_mode": demo_mode, "debug_raw": debug_raw,
+        "api_key_used": api_key, "demo_mode": demo_mode,
+        "debug_raw": debug_raw, "day_info": day_info,
     })
     st.rerun()
 
@@ -829,9 +885,7 @@ if st.session_state.get("debug_raw"):
 st.markdown('<div class="sh">🃏 Step 3 — Review & Edit Compositions</div>',
             unsafe_allow_html=True)
 st.markdown('<div class="ib">💡 Change <b>Group</b> to move a player between raids or to bench. '
-            'Change <b>Role</b> to fix a misclassification. '
-            'The <b>✅ Confirmed Days</b> column shows only the days with a real confirmed sign-up '
-            '(absence/tentative/junk entries are already filtered out).</div>', unsafe_allow_html=True)
+            'Change <b>Role</b> to fix a misclassification.</div>', unsafe_allow_html=True)
 
 all_rows = []
 for label in raid_keys + [bench_key]:
@@ -842,7 +896,11 @@ for label in raid_keys + [bench_key]:
             "Spec":      p.spec or "—",
             "Role":      p.role,
             "Group":     label,
-            "Available": ", ".join(f"{DAY_EMOJI[d]} {DAY_LABELS[d]}" for d in sorted(p.avail_days)),
+            "Available": ", ".join(
+                f"{st.session_state.get('day_info',{}).get(d,('📅',f'Day {d}'))[0]} "
+                f"{st.session_state.get('day_info',{}).get(d,('📅',f'Day {d}'))[1]}"
+                for d in sorted(p.avail_days)
+            ),
         })
 
 flat_df       = (pd.DataFrame(all_rows) if all_rows else
@@ -859,7 +917,7 @@ edited_df = st.data_editor(
                          options=["Tank","Healer","DPS"], width="small"),
         "Group":     st.column_config.SelectboxColumn("Group (reassign here)",
                          options=group_options, width="large"),
-        "Available": st.column_config.TextColumn("✅ Confirmed Days", disabled=True, width="medium"),
+        "Available": st.column_config.TextColumn("Available", disabled=True, width="medium"),
     },
     key="player_editor",
 )
