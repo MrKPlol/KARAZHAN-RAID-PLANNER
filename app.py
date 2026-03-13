@@ -196,49 +196,42 @@ def filter_events(events: list, show_all: bool) -> list:
     other = sorted([e for e in events if not _is_kara(e)], key=_event_ts, reverse=True)
     return kara + other
 
+
 def _weekday_info(ts: int) -> tuple:
     """Returns (emoji, weekday_name) for a Unix timestamp."""
     try:
         dt      = datetime.fromtimestamp(int(ts), tz=timezone.utc)
-        weekday = dt.strftime("%A")   # "Sunday", "Monday", …
+        weekday = dt.strftime("%A")
         emoji   = next((em for em, lb in zip(DAY_EMOJI, DAY_LABELS)
                         if lb.lower() == weekday.lower()), "📅")
         return emoji, weekday
     except Exception:
         return "📅", "Unknown"
 
+
 def make_day_info(selected_events: list) -> dict:
     """
     Returns {day_idx: (emoji, weekday_name)} based on real event timestamps.
-    If two events share the same weekday (e.g. 2× Sunday), they both get
-    that weekday name — the A/B suffix is added by the algorithm.
-    Also builds the parse_fixed day_map dynamically so "Stone=Monday"
-    resolves to whichever day_idx has a Monday event.
+    Works for any number of selected events (2, 3, 4…).
+    Two events on the same weekday both get that name — A/B suffix added by algorithm.
     """
-    info: dict = {}
-    for i, e in enumerate(selected_events):
-        em, wd = _weekday_info(_event_ts(e))
-        info[i] = (em, wd)
-    return info
+    return {i: _weekday_info(_event_ts(e)) for i, e in enumerate(selected_events)}
+
 
 def make_dynamic_day_map(day_info: dict) -> dict:
     """
-    Maps weekday names → list of day_idx values.
-    Needed so fixed assignments like Stone=Monday still work
-    even if Monday is now day_idx 1 or 2.
+    Maps weekday name aliases → list of day_idx values.
+    So 'stone=monday' resolves to whichever slot(s) have a Monday event.
     """
     dm: dict = {}
     for idx, (em, wd) in day_info.items():
-        wd_lower = wd.lower()
-        for alias in [wd_lower, wd_lower[:3]]:   # "monday" and "mon"
+        for alias in [wd.lower(), wd.lower()[:3]]:
             dm.setdefault(alias, [])
             if idx not in dm[alias]:
                 dm[alias].append(idx)
-    # Also keep numeric aliases
-    for i in range(3):
+    for i in range(5):
         dm[str(i)] = [i]
     return dm
-
 
 
 
@@ -295,10 +288,6 @@ def parse_signups(event_data: dict, day_idx: int, strict: bool, role_overrides: 
 # ══════════════════════════════════════════════════════════════════
 
 def parse_fixed(raw: str, day_map: dict | None = None) -> dict:
-    """
-    day_map: dynamic {weekday_alias: [day_idx, ...]} from make_dynamic_day_map().
-    Falls back to static Sun=0/Mon=1/Tue=2 if not provided.
-    """
     if day_map is None:
         day_map = {"sunday":[0],"monday":[1],"tuesday":[2],
                    "sun":[0],"mon":[1],"tue":[2],
@@ -311,7 +300,6 @@ def parse_fixed(raw: str, day_map: dict | None = None) -> dict:
         name = name.strip().lower()
         day  = day.strip().lower()
         if name and day in day_map:
-            # If multiple slots share a weekday (e.g. 2x Sunday), assign to first one
             result[name] = day_map[day][0]
     return result
 
@@ -344,7 +332,9 @@ def parse_buddies(raw: str) -> list:
 #  ALGORITHM
 # ══════════════════════════════════════════════════════════════════
 
-def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups: list, day_info: dict) -> dict:
+def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups: list, day_info: dict | None = None) -> dict:
+    if day_info is None:
+        day_info = {i: (DAY_EMOJI[i] if i < 3 else '📅', DAY_LABELS[i] if i < 3 else f'Day {i}') for i in range(3)}
     seen: dict = {}
     for day_idx in sorted(players_by_day):
         for p in players_by_day[day_idx]:
@@ -384,18 +374,15 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
     raids_per_day: dict = {}
 
     # Standard-Zuweisung: 2 Raids wenn exklusiv > 18, sonst 1 wenn > 10
-    for d in range(3):
+    all_day_idxs = sorted(players_by_day.keys())
+    for d in all_day_idxs:
         excl = exclusive_count.get(d, 0)
         has_players = raw_count.get(d, 0) >= 10
         raids_per_day[d] = 2 if excl >= 18 else (1 if has_players else 0)
 
-    # Montag-Priorität für den 2. Slot, um auf 3 zu kommen
     total = sum(raids_per_day.values())
-    if total < 3 and raw_count.get(1, 0) >= 18:
-        raids_per_day[1] = 2
-        total = sum(raids_per_day.values())
 
-    active = sorted([d for d in range(3) if raw_count.get(d,0) >= 10], key=lambda d: (-raw_count.get(d,0), d==1))
+    active = sorted([d for d in all_day_idxs if raw_count.get(d,0) >= 10], key=lambda d: -raw_count.get(d,0))
     while total < 3 and active:
         bumped = False
         for d in active:
@@ -407,9 +394,9 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         if not bumped: break
 
     slot_labels: list[tuple] = []
-    for day_idx in range(3):
-        n = raids_per_day.get(day_idx, 0)
-        # Use real weekday from the actual event timestamp
+    # Use real weekday names from event timestamps
+    for day_idx in all_day_idxs:
+        n  = raids_per_day.get(day_idx, 0)
         em, dn = day_info.get(day_idx, ("📅", f"Day {day_idx}"))
         for slot in range(1, n+1):
             lbl = f"{em} {dn}" if n == 1 else f"{em} {dn} {'AB'[slot-1]}"
@@ -440,44 +427,21 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             if p.assigned or done >= dps_need: break
             group.append(p); p.assigned = True; p.group_key = label; done += 1
 
-    # Second Pass: Flex players
-    # Priority order: fixed-day > Tank > Healer > DPS (scarce roles placed first)
+    # Second Pass: Flex
     flexible = [p for p in all_players if not p.assigned and len(p.avail_days) > 1]
-
-    def _need(role, label):
+    def _need(role: str, label: str) -> int:
         have = sum(1 for x in results[label] if x.role == role)
         return max(0, TARGET[role] - have)
 
-    def _total_free(label):
-        return RAID_SIZE - len(results[label])
-
-    flexible.sort(key=lambda p: (
-        0 if p.name_lower in fixed_assignments else 1,
-        0 if p.role == "Tank" else (1 if p.role == "Healer" else 2),
-    ))
+    flexible.sort(key=lambda p: (0 if p.name_lower in fixed_assignments else 1, 0 if p.role == "Tank" else (1 if p.role == "Healer" else 2)))
 
     for p in flexible:
-        if p.assigned:
-            continue
-        candidates = [
-            (day_idx, lbl) for day_idx, lbl in slot_labels
-            if day_idx in p.avail_days and _total_free(lbl) > 0
-        ]
-        if not candidates:
-            continue
-        # Recalculated live after each assignment so distribution stays balanced.
-        # 1. Role urgently needed  (higher role-need -> placed first)
-        # 2. Most total spots open (emptier group -> placed first, spreads evenly)
-        # 3. day_idx as stable tiebreak
-        candidates.sort(key=lambda entry: (
-            -_need(p.role, entry[1]),
-            -_total_free(entry[1]),
-            entry[0],
-        ))
+        if p.assigned: continue
+        candidates = [(day_idx, lbl) for day_idx, lbl in slot_labels if day_idx in p.avail_days and len(results[lbl]) < RAID_SIZE]
+        if not candidates: continue
+        candidates.sort(key=lambda entry: (-_need(p.role, entry[1]), len(results[entry[1]])))
         best_day, best_label = candidates[0]
-        results[best_label].append(p)
-        p.assigned  = True
-        p.group_key = best_label
+        results[best_label].append(p); p.assigned = True; p.group_key = best_label
 
     for p in all_players:
         if not p.assigned:
@@ -769,30 +733,33 @@ default_sel   = kara_labels[:3] if len(kara_labels) >= 3 else event_labels[:3]
 
 st.markdown("""<div class="ib">
 🏰 <b>Kara events are listed first</b> and pre-selected.
-Select exactly <b>3 events</b> in the order: Sunday → Monday → Tuesday.
+Select <b>2–4 events</b> — the app builds raids for exactly the events you pick.
+Two events on the same day? Automatically gets an A/B split if enough sign-ups.
 </div>""", unsafe_allow_html=True)
 
 selected_labels = st.multiselect(
-    "Choose 3 events (order matters: Sunday first, then Monday, then Tuesday)",
-    options=event_labels, default=default_sel, max_selections=3,
+    "Choose your raid events (2–4, order matters: earliest day first)",
+    options=event_labels, default=default_sel, max_selections=4,
 )
 
-if len(selected_labels) != 3:
-    st.markdown(f'<div class="ib">ℹ️ Select exactly <b>3 events</b> '
+if len(selected_labels) < 2:
+    st.markdown(f'<div class="ib">ℹ️ Select at least <b>2 events</b> '
                 f'(currently {len(selected_labels)}).</div>', unsafe_allow_html=True)
     st.stop()
 
 selected_events = [event_options[l] for l in selected_labels]
 
-# Config summary
+# Show active config summary
 if role_overrides:
     st.markdown('<div class="ib">🎭 Role overrides: ' +
                 " · ".join(f"<b>{n.title()}</b> → {r}" for n,r in role_overrides.items()) +
                 "</div>", unsafe_allow_html=True)
 if fixed_assignments:
-    dn = {0:"Sunday",1:"Monday",2:"Tuesday"}
+    # Build day name map from real weekday of each selected event
+    _di = make_day_info(selected_events)
+    _dn = {i: wd for i, (em, wd) in _di.items()}
     st.markdown('<div class="ib">📌 Fixed: ' +
-                " · ".join(f"<b>{n.title()}</b> → {dn[d]}"
+                " · ".join(f"<b>{n.title()}</b> → {_dn.get(d, f'Day {d}')}"
                            for n,d in fixed_assignments.items()) +
                 "</div>", unsafe_allow_html=True)
 if buddy_groups:
@@ -810,10 +777,9 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
     players_by_day: dict = {}
     debug_raw: dict      = {}
 
-    # Build real weekday info from actual event timestamps
+    # Derive real weekday info from event timestamps (works for any number of events)
     day_info    = make_day_info(selected_events)
     dynamic_map = make_dynamic_day_map(day_info)
-    # Re-parse fixed assignments using the dynamic day map
     dyn_fixed   = parse_fixed(fixed_raw, dynamic_map)
 
     with st.spinner("Fetching sign-up data..."):
@@ -823,8 +789,8 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
             if event_data:
                 raw_su = (event_data.get("signUps") or event_data.get("signups")
                           or event_data.get("players") or [])
-                _, wd  = day_info.get(day_idx, ("📅", f"Day {day_idx}"))
-                debug_raw[f"{wd} (slot {day_idx})"] = raw_su[:3]
+                em, wd = day_info.get(day_idx, ("📅", f"Day {day_idx}"))
+                debug_raw[f"{em} {wd} (slot {day_idx})"] = raw_su[:3]
                 plist = parse_signups(event_data, day_idx, strict_mode, role_overrides)
                 if plist:
                     players_by_day[day_idx] = plist
@@ -851,7 +817,7 @@ if "results" not in st.session_state:
     <div style='text-align:center;padding:5rem 2rem;color:#2e2410'>
       <div style='font-size:3.5rem;margin-bottom:.8rem'>🏰</div>
       <div style='font-family:"Cinzel",serif;font-size:1.15rem;color:#5a4a22'>
-        Select 3 events above and click <em>Calculate Raid Compositions</em>
+        Select your events above and click <em>Calculate Raid Compositions</em>
       </div>
     </div>""", unsafe_allow_html=True)
     st.stop()
