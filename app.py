@@ -22,6 +22,15 @@ INVALID_STATUSES = {"absence", "bench", "no", "declined", "absent", "unavailable
 VALID_WOW_CLASSES = {
     "warrior","paladin","hunter","rogue","priest",
     "shaman","mage","warlock","druid","death knight","dk",
+    "tank",  # Raid-Helper stores tank-spec entries with className="Tank"
+}
+
+# Maps Raid-Helper specName → real WoW class when className=="Tank"
+RAIDHELPER_TANK_SPEC_TO_CLASS: dict = {
+    "protection":  "warrior",      # Warrior Prot (ambiguous, but most common)
+    "protection1": "paladin",      # Paladin Prot (RH uses Protection1 for Paladin)
+    "guardian":    "druid",        # Druid Bear Tank
+    "blood":       "death knight",
 }
 
 ROLE_NORM: dict = {
@@ -77,7 +86,13 @@ class Player:
     def name_lower(self) -> str:
         return self.name.lower().strip()
 
-# ── COMPOSITION SCORING
+# ══════════════════════════════════════════════════════════════════
+#  COMPOSITION SCORING
+#  Philosophy: Each buff counts ONCE per group → algorithm naturally
+#  distributes Shamans/Warlocks/etc across all groups. Score is a
+#  tiebreaker — role balance and equality always take priority.
+# ══════════════════════════════════════════════════════════════════
+
 def is_melee(p: Player) -> bool:
     cls  = p.class_name.lower()
     spec = p.spec.lower()
@@ -91,52 +106,191 @@ def is_melee(p: Player) -> bool:
         return True
     return False
 
-def score_gain(player: Player, group: list) -> int:
+def _has(group: list, cls_name: str) -> bool:
+    return any(x.class_name.lower() == cls_name for x in group)
+
+def _spec_contains(group: list, cls_name: str, *spec_fragments) -> bool:
+    return any(x.class_name.lower() == cls_name and
+               any(f in x.spec.lower() for f in spec_fragments)
+               for x in group)
+
+def score_gain(player: Player, group: list, parse_group: bool = False) -> int:
+    """
+    How many score points does adding this player contribute to the group?
+    Only counts a buff the FIRST time that class/spec appears — this naturally
+    distributes key classes (Shaman, Warlock, etc.) across all groups.
+    A mild parse_group bonus can be applied for designated parse groups.
+    """
     score = 0
     cls   = player.class_name.lower()
+    spec  = player.spec.lower()
+
+    # ── Raid-wide buffs (only valuable if first of that type in group)
+
+    # Bloodlust/Heroism — most impactful buff in Kara by far
     if cls == "shaman":
-        has_bl = any(x.class_name.lower() == "shaman" for x in group)
-        score += 0 if has_bl else 300
+        score += 0 if _has(group, "shaman") else 300
+
+    # Warlock — Curse of Elements (+10% magic dmg for all), Healthstone, Soulstone
     if cls == "warlock":
-        has_wl = any(x.class_name.lower() == "warlock" for x in group)
-        score += 0 if has_wl else 150
-        if has_wl: score -= 50
+        score += 0 if _has(group, "warlock") else 150
+        if _has(group, "warlock"):
+            score -= 30  # mild discourage stacking, not heavy
+
+    # Paladin — Blessings (Kings/Salv/Wisdom), Auras, BoP, combat rez
+    if cls == "paladin":
+        score += 0 if _has(group, "paladin") else 120
+
+    # Hunter — Ferocious Inspiration, Trueshot Aura, Misdirection
     if cls == "hunter":
-        has_hu = any(x.class_name.lower() == "hunter" for x in group)
-        score += 0 if has_hu else 80
+        score += 0 if _has(group, "hunter") else 80
+
+    # Shadow Priest — Shadow Weaving (13% shadow dmg), VE (healing), Vampiric Touch (mana regen)
+    if cls == "priest" and "shadow" in spec:
+        has_spriest = _spec_contains(group, "priest", "shadow")
+        score += 0 if has_spriest else 100
+
+    # Balance Druid — Moonkin Aura (+5% spell crit for casters)
+    if cls == "druid" and ("balance" in spec or "moonkin" in spec or "boomkin" in spec):
+        has_boomkin = _spec_contains(group, "druid", "balance","moonkin","boomkin")
+        score += 0 if has_boomkin else 70
+
+    # Druid (any) — Mark of the Wild, Innervate, Rebirth (combat rez!)
+    if cls == "druid":
+        score += 0 if _has(group, "druid") else 60
+
+    # Mage — Arcane Brilliance (+intellect), Spellsteal, polymorph CC, Curse removal
+    if cls == "mage":
+        score += 0 if _has(group, "mage") else 50
+
+    # ── Synergy bonus: Shadow Priest + Warlock in same group (Shadow Weaving × CoE)
+    if cls == "priest" and "shadow" in spec and _has(group, "warlock"):
+        score += 50
+    if cls == "warlock" and _spec_contains(group, "priest", "shadow"):
+        score += 50
+
+    # ── Curse removal utility (Mage or Druid — important for several Kara bosses)
+    curse_removers_present = _has(group, "mage") or _has(group, "druid")
+    if cls in ("mage", "druid") and not curse_removers_present:
+        score += 30
+
+    # ── Melee / Ranged balance (soft guidance, not hard penalty)
     if player.role == "DPS":
         dps_grp   = [x for x in group if x.role == "DPS"]
         melee_cnt = sum(1 for x in dps_grp if is_melee(x))
         if is_melee(player):
-            score += 70 if melee_cnt < 2 else (30 if melee_cnt < 3 else -60)
+            # Ideal: 2-3 melee. Below 2 = really want one. Above 3 = meh, but it happens.
+            if melee_cnt < 2:
+                score += 60
+            elif melee_cnt < 3:
+                score += 20
+            # 4+ melee: no penalty — accept reality. Just no bonus.
         else:
-            if melee_cnt > 3: score += 50
+            # Ranged is slightly preferred to balance out if already many melee
+            if melee_cnt >= 4:
+                score += 30
+
+    # ── Class diversity — mild discouragement for stacking, not a hard wall
     same_cls = sum(1 for x in group if x.class_name.lower() == cls)
-    if same_cls >= 3: score -= 200
-    elif same_cls >= 2: score -= 40
+    if same_cls >= 3:
+        score -= 150   # 3+ same class is genuinely bad
+    elif same_cls >= 2:
+        score -= 25    # gentle nudge
+
+    # ── Parse group: very mild tiebreaker boost (doesn't override balance logic)
+    if parse_group:
+        score += 30
+
     return score
+
+
+def subgroup_score_gain(player: Player, subgroup_players: list) -> int:
+    """
+    Within-5man-subgroup synergy bonuses.
+    These are applied when assigning subgroups, not during group building.
+    """
+    score = 0
+    cls   = player.class_name.lower()
+    spec  = player.spec.lower()
+    sg_classes = [p.class_name.lower() for p in subgroup_players]
+    sg_specs   = [(p.class_name.lower(), p.spec.lower()) for p in subgroup_players]
+
+    # Enh Shaman in melee subgroup → Windfury Totem (massive melee DPS buff)
+    if cls == "shaman" and "enhancement" in spec:
+        has_melee_in_sg = any(is_melee(p) for p in subgroup_players if p.role == "DPS")
+        if has_melee_in_sg:
+            score += 150
+
+    # Ele or Resto Shaman in caster subgroup → Wrath of Air (+spell haste) / Mana Tide
+    if cls == "shaman" and ("elemental" in spec or "restoration" in spec):
+        has_caster = any(c in sg_classes for c in ("warlock","mage","priest","druid"))
+        if has_caster:
+            score += 100
+
+    # Warlock in caster subgroup → CoE helps all casters in that 5-man
+    if cls == "warlock":
+        has_caster = any(c in sg_classes for c in ("mage","priest","druid","shaman"))
+        if has_caster:
+            score += 60
+
+    return score
+
 
 def group_score(group: list) -> int:
+    """Full score for a completed group — used for display and equity calculation."""
     score   = 0
     classes = [p.class_name.lower() for p in group]
-    score  += 300 if "shaman" in classes else -200
-    score  += 150 if "warlock" in classes else 0
-    score  += 80  if "hunter" in classes  else 0
-    dps     = [p for p in group if p.role == "DPS"]
-    melee   = sum(1 for p in dps if is_melee(p))
-    if 2 <= melee <= 3: score += 100
-    elif melee > 3:     score -= 60 * (melee - 3)
-    elif melee < 2:     score -= 40
+    specs   = [(p.class_name.lower(), p.spec.lower()) for p in group]
+
+    # Bloodlust
+    score += 300 if "shaman" in classes else -200
+
+    # Key raid buffs (only count once)
+    score += 150 if "warlock" in classes else 0
+    score += 120 if "paladin" in classes else 0
+    score += 80  if "hunter"  in classes else 0
+    score += 60  if "druid"   in classes else 0
+    score += 50  if "mage"    in classes else 0
+
+    # Shadow Priest
+    if any(c == "priest" and "shadow" in s for c,s in specs):
+        score += 100
+
+    # Moonkin (Boomkin)
+    if any(c == "druid" and any(f in s for f in ("balance","moonkin")) for c,s in specs):
+        score += 70
+
+    # Shadow Priest × Warlock synergy
+    has_spriest = any(c == "priest" and "shadow" in s for c,s in specs)
+    if has_spriest and "warlock" in classes:
+        score += 50
+
+    # Melee balance — guidance only, no hard penalty for 4+
+    dps    = [p for p in group if p.role == "DPS"]
+    melee  = sum(1 for p in dps if is_melee(p))
+    if 2 <= melee <= 3: score += 80
+    elif melee < 2:     score -= 30
+    # 4+ melee: no penalty — it is what it is
+
+    # Diversity — mild discouragement of stacking same class
     for cnt in Counter(classes).values():
-        if cnt >= 3:  score -= 150
-        elif cnt >= 2: score -= 20
+        if cnt >= 3:   score -= 120
+        elif cnt >= 2: score -= 15
+
     return score
 
+
 def score_label(s: int) -> tuple:
-    if s >= 600: return "⭐⭐⭐","#50c050"
-    if s >= 400: return "⭐⭐","#a0c040"
+    if s >= 700: return "⭐⭐⭐","#50c050"
+    if s >= 450: return "⭐⭐","#a0c040"
     if s >= 200: return "⭐","#c0a030"
     return "⚠️","#e06040"
+
+
+def scores_are_balanced(scores: list) -> bool:
+    """True if all groups are within ~200 pts of each other."""
+    if len(scores) < 2: return True
+    return max(scores) - min(scores) < 200
 
 # ── SUBGROUP ASSIGNMENT
 def assign_subgroups(players: list) -> list:
@@ -260,7 +414,8 @@ def filter_events(events: list, show_all: bool) -> list:
 
 # ── PARSING
 def _extract_role(s: dict) -> str:
-    for f in ["entryType","role","roleName","roleType","signUpRole","position","class_role","type"]:
+    # roleName is most reliable in real Raid-Helper events ("Tanks","Melee","Ranged","Healers")
+    for f in ["roleName","entryType","role","roleType","signUpRole","class_role","type"]:
         raw = s.get(f)
         if raw is None: continue
         r = ROLE_NORM.get(str(raw).lower().strip(),"")
@@ -284,6 +439,13 @@ def parse_signups(event_data: dict, day_idx: int, strict: bool, role_overrides: 
         role = _extract_role(s)
         ov   = role_overrides.get(name.lower().strip())
         if ov: role = ov
+
+        # Raid-Helper uses className="Tank" for tank specs — resolve to real class
+        if cls == "tank":
+            real_cls = RAIDHELPER_TANK_SPEC_TO_CLASS.get(spec.lower().strip())
+            if real_cls:
+                cls = real_cls
+
         players.append(Player(user_id=uid or name, name=name, class_name=cls,
                                spec=spec, role=role, avail_days=[day_idx]))
     return players
@@ -339,7 +501,8 @@ def _avoid_conflict(player: Player, group: list, avoid_pairs: list) -> bool:
     return False
 
 def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups: list,
-                    day_info: dict | None = None, avoid_pairs: list | None = None) -> dict:
+                    day_info: dict | None = None, avoid_pairs: list | None = None,
+                    parse_group_label: str = "") -> dict:
     if day_info is None:
         day_info = {i:(DAY_EMOJI[i] if i<3 else "📅", DAY_LABELS[i] if i<3 else f"Day {i}") for i in range(3)}
     if avoid_pairs is None: avoid_pairs = []
@@ -428,38 +591,75 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             if _avoid_conflict(p,group,avoid_pairs): continue
             group.append(p); p.assigned=True; p.group_key=label; done+=1
 
-    # Pass 2: Flex players — score-based
+    # Pass 2: Flex players — equity-aware, score-guided placement
+    # Priority order: role need > equity (balance scores across groups) > score gain > space
+    # This ensures no group is left behind while still optimising composition quality.
     flexible = [p for p in all_players if not p.assigned and len(p.avail_days)>1]
     flexible.sort(key=lambda p: (
         0 if p.name_lower in fixed_assignments else 1,
         0 if p.role=="Tank" else (1 if p.role=="Healer" else 2),
     ))
 
-    def _role_need(role,label):
+    def _role_need(role, label):
         have = sum(1 for x in results[label] if x.role==role)
         return max(0, TARGET[role]-have)
+
     def _free(label): return RAID_SIZE-len(results[label])
+
+    def _current_score(label):
+        return group_score(results[label]) if results[label] else 0
 
     for p in flexible:
         if p.assigned: continue
+
+        # Build candidate slots (respecting avoid pairings)
         cands = [(di,lbl) for di,lbl in slot_labels
-                 if di in p.avail_days and _free(lbl)>0
-                 and not _avoid_conflict(p,results[lbl],avoid_pairs)]
-        if not cands:  # relax avoid pairing if impossible
+                 if di in p.avail_days and _free(lbl) > 0
+                 and not _avoid_conflict(p, results[lbl], avoid_pairs)]
+        if not cands:  # relax avoid pairing if truly impossible
             cands = [(di,lbl) for di,lbl in slot_labels
-                     if di in p.avail_days and _free(lbl)>0]
+                     if di in p.avail_days and _free(lbl) > 0]
         if not cands: continue
-        cands.sort(key=lambda e: (-_role_need(p.role,e[1]), -score_gain(p,results[e[1]]),
-                                   -_free(e[1]), e[0]))
-        _,best_lbl = cands[0]
+
+        # Compute current scores for equity awareness
+        active_labels = [lbl for _,lbl in slot_labels]
+        current_scores = [_current_score(lbl) for lbl in active_labels]
+        avg_score = sum(current_scores)/len(current_scores) if current_scores else 0
+
+        def _sort_key(entry):
+            _, lbl = entry
+            rn   = _role_need(p.role, lbl)             # role urgency (highest priority)
+            sg   = score_gain(p, results[lbl],           # composition score gain
+                              parse_group=(lbl == parse_group_label))
+            sc   = _current_score(lbl)                  # current group score
+            # Equity bonus: prefer groups below average score
+            eq   = max(0, avg_score - sc)               # positive = group is below avg
+            fr   = _free(lbl)                           # total free slots
+            # Sort: role need first, then equity+score combined, then space, then slot order
+            return (-rn, -(eq * 0.5 + sg), -fr, entry[0])
+
+        cands.sort(key=_sort_key)
+        _, best_lbl = cands[0]
         results[best_lbl].append(p); p.assigned=True; p.group_key=best_lbl
 
-    # Assign subgroups
+    # Pass 3: Bench last resort — but first check if any unassigned player
+    # could complete an incomplete group (avoid benching unnecessarily)
+    unassigned = [p for p in all_players if not p.assigned]
+    for p in unassigned:
+        # Try to place in any group that still has open spots on an available day
+        rescue_cands = [(di,lbl) for di,lbl in slot_labels
+                        if di in p.avail_days and _free(lbl) > 0]
+        if rescue_cands:
+            rescue_cands.sort(key=lambda e: (-_role_need(p.role,e[1]), -_free(e[1])))
+            _,best = rescue_cands[0]
+            results[best].append(p); p.assigned=True; p.group_key=best
+
+    # Assign subgroups (Casters SG1, Melee SG2)
     for lbl,grp in results.items():
         if lbl != "🪑 Bench":
             results[lbl] = assign_subgroups(grp)
 
-    # Bench
+    # Final bench: only truly unplaceable players
     for p in all_players:
         if not p.assigned:
             p.group_key="🪑 Bench"; results["🪑 Bench"].append(p)
@@ -597,10 +797,21 @@ with st.sidebar:
     Never placed in the same group.<br><em>Relaxed automatically if unavoidable.</em></div>""", unsafe_allow_html=True)
     avoid_raw = st.text_area("avoid_input", value=DEFAULT_AVOID, height=80, label_visibility="collapsed")
     st.markdown("---")
+    st.markdown("---")
+    st.markdown('<div class="sh">🏆 Parse Group</div>', unsafe_allow_html=True)
+    st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.8rem;color:#5a4a28;margin-bottom:.4rem'>
+    One group gets a <em>very mild</em> score boost — still fair for everyone.<br>
+    Only affects tiebreaks, not role distribution.</div>""", unsafe_allow_html=True)
+    enable_parse_group = st.checkbox("🏆 Activate Parse Group", value=False,
+                                       key="enable_parse_group")
+    # The actual group selector is shown below the event picker (needs slot labels first)
+
+    st.markdown("---")
     st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.78rem;color:#4a3a20;line-height:1.7'>
     <b style='color:#7a5a28'>Rule</b>: 1 Tank · 2 Healers · 7 DPS<br>
-    <b style='color:#7a5a28'>Score</b>: BL · Warlock/CoE · Hunter · Melee balance<br>
-    <b style='color:#7a5a28'>Subgroups</b>: Casters SG1 · Melee SG2 (for RH export)<br>
+    <b style='color:#7a5a28'>Score</b>: BL · Warlock · Paladin · Hunter · SPriest · Druid · Mage<br>
+    <b style='color:#7a5a28'>Equity</b>: all groups get fair buffs — no stacking<br>
+    <b style='color:#7a5a28'>Subgroups</b>: Casters SG1 · Melee SG2<br>
     <b style='color:#7a5a28'>2nd group</b>: auto when ≥18 exclusive sign-ups
     </div>""", unsafe_allow_html=True)
 
@@ -655,6 +866,22 @@ if fixed_assignments:
 if avoid_pairs:
     st.markdown('<div class="ib">🚫 Avoid Pairings: '+" · ".join(" ≠ ".join(p.title() for p in sorted(pair)) for pair in avoid_pairs)+"</div>", unsafe_allow_html=True)
 
+# ── PARSE GROUP SELECTOR (shown after events are known)
+parse_group_label = ""
+if st.session_state.get("enable_parse_group", False):
+    known_raid_keys = [k for k in st.session_state.get("results", {}) if "Bench" not in k]
+    if known_raid_keys:
+        parse_group_label = st.selectbox(
+            "🏆 Select Parse Group",
+            options=known_raid_keys,
+            help="This group gets a very mild score boost for tiebreaks only.",
+        )
+        st.markdown(f'<div class="ib">🏆 Parse Group: <b>{parse_group_label}</b> '
+                    f'— mild tiebreaker boost active.</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="ib">🏆 Parse Group: Calculate first to select a group.</div>',
+                    unsafe_allow_html=True)
+
 # ── STEP 2
 st.markdown('<div class="sh">⚔️ Step 2 — Build Compositions</div>', unsafe_allow_html=True)
 
@@ -679,7 +906,7 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
         st.markdown('<div class="wb">❌ No confirmed sign-ups found.</div>', unsafe_allow_html=True)
         st.stop()
 
-    results = build_all_raids(players_by_day, dyn_fixed, buddy_groups, day_info, avoid_pairs)
+    results = build_all_raids(players_by_day, dyn_fixed, buddy_groups, day_info, avoid_pairs, parse_group_label)
     st.session_state.update({"results":results,"selected_events":selected_events,
         "api_key_used":api_key,"demo_mode":demo_mode,"debug_raw":debug_raw,"day_info":day_info})
     st.rerun()
@@ -761,8 +988,16 @@ for ci,label in enumerate(raid_keys):
     orig  = results.get(label,[])
     sc    = group_score(orig) if orig else 0
     sl,sc_col = score_label(sc)
-    has_bl = any(p.class_name.lower()=="shaman"  for p in orig)
-    has_wl = any(p.class_name.lower()=="warlock" for p in orig)
+    orig_cls  = [p.class_name.lower() for p in orig]
+    orig_specs = [(p.class_name.lower(), p.spec.lower()) for p in orig]
+
+    has_bl  = "shaman"  in orig_cls
+    has_wl  = "warlock" in orig_cls
+    has_pal = "paladin" in orig_cls
+    has_spr = any(c=="priest" and "shadow" in s for c,s in orig_specs)
+    has_druid = "druid" in orig_cls
+
+    is_parse_group = (label == parse_group_label and st.session_state.get("enable_parse_group",False))
 
     def _c(val,need,icon):
         col="#50c050" if val==need else "#e06040"
@@ -770,11 +1005,16 @@ for ci,label in enumerate(raid_keys):
 
     with val_cols[ci % len(val_cols)]:
         bc = "#30a040" if valid else "#c04020"
+        pg_banner = '<div style="font-size:.65rem;color:#c9a84c;margin-bottom:.3rem">🏆 Parse Group</div>' if is_parse_group else ""
         warn = ""
-        if not has_bl: warn += '<span class="chip" style="color:#e06040;border-color:#e0604030;background:#e0604018">❌ No Bloodlust!</span> '
-        if not has_wl: warn += '<span class="chip" style="color:#c08030;border-color:#c0803030;background:#c0803018">⚠️ No Warlock</span> '
+        if not has_bl:  warn += '<span class="chip" style="color:#e06040;border-color:#e0604030;background:#e0604018">❌ No BL!</span> '
+        if not has_wl:  warn += '<span class="chip" style="color:#c08030;border-color:#c0803030;background:#c0803018">⚠️ No Warlock</span> '
+        if not has_pal: warn += '<span class="chip" style="color:#806020;border-color:#80602030;background:#80602018">⚠️ No Paladin</span> '
+        if has_spr: warn += '<span class="chip" style="color:#50c050;border-color:#50c05030;background:#50c05018">✓ SPriest</span> '
+        if has_druid: warn += '<span class="chip" style="color:#50c050;border-color:#50c05030;background:#50c05018">✓ Rebirth</span> '
         st.markdown(f"""
         <div style="background:#0d0d18;border:1px solid {bc};border-radius:6px;padding:.65rem .8rem;margin-bottom:.5rem">
+          {pg_banner}
           <div style="font-family:'Cinzel',serif;font-size:.88rem;color:#f0c060;margin-bottom:.45rem">{'✅' if valid else '⚠️'} {label}</div>
           <div class="chips">{_c(tanks,1,'🛡️')}{_c(heals,2,'💚')}{_c(dps,7,'⚔️')}
             <span class="chip" style="color:#a09060;border-color:#4a3a2030;background:#4a3a2018">📊 {total}/10</span>
@@ -787,6 +1027,17 @@ if not all_valid:
     st.markdown('<div class="wb">⚠️ One or more groups violate <b>1 Tank · 2 Healers · 7 DPS</b>.</div>', unsafe_allow_html=True)
 else:
     st.markdown('<div class="sb">✅ All groups valid <b>1-2-7</b>!</div>', unsafe_allow_html=True)
+
+# Balance indicator
+all_scores = [group_score(results.get(k,[])) for k in raid_keys if results.get(k)]
+if len(all_scores) >= 2:
+    diff = max(all_scores) - min(all_scores)
+    if diff < 200:
+        st.markdown(f'<div class="sb">⚖️ Groups are well balanced (score spread: {diff}pts)</div>', unsafe_allow_html=True)
+    elif diff < 400:
+        st.markdown(f'<div class="ib">⚖️ Groups are reasonably balanced (score spread: {diff}pts)</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="wb">⚖️ Score imbalance detected (spread: {diff}pts) — consider manual adjustments</div>', unsafe_allow_html=True)
 
 # ── STEP 4 Discord Export
 st.markdown('<div class="sh" style="margin-top:1rem">📢 Step 4 — Discord Export</div>', unsafe_allow_html=True)
