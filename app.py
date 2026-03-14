@@ -685,64 +685,23 @@ with st.sidebar:
     strict_mode = st.checkbox("Strict status filter", value=True,
                                help="Only primary/confirmed/spec.")
 
-    # ── Parse Group (prominent, near top)
+    # ── Parse Group
     st.markdown("---")
     st.markdown('<div class="sh">🏆 Parse Group</div>', unsafe_allow_html=True)
     enable_parse_group = st.checkbox("Activate Parse Group", value=False, key="enable_parse_group")
     if enable_parse_group:
-        st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.78rem;color:#5a4a28'>
-        Select after first calculation. Updates automatically when you change settings.</div>""",
-        unsafe_allow_html=True)
         known_keys = [k for k in st.session_state.get("results",{}) if "Bench" not in k]
         if known_keys:
-            prev_sel   = st.session_state.get("_last_pg_label", known_keys[0])
-            prev_boost = st.session_state.get("_last_pg_boost", 150)
-            if prev_sel not in known_keys:
-                prev_sel = known_keys[0]
-            parse_group_sel = st.selectbox("Which group?", options=known_keys,
-                                            index=known_keys.index(prev_sel),
-                                            key="parse_group_sel")
-            parse_boost_val = st.slider("Boost strength", min_value=50, max_value=300,
-                                         value=int(prev_boost) if prev_boost != -1 else 150,
-                                         step=50, key="parse_boost_val",
-                                         help="50 = subtle  ·  150 = noticeable  ·  300 = strong")
-            # Auto-rebuild immediately when settings change — no re-fetch needed
-            _pg_changed = (parse_group_sel != st.session_state.get("_last_pg_label","") or
-                           parse_boost_val != st.session_state.get("_last_pg_boost", -1))
-            if _pg_changed and "_players_by_day" in st.session_state:
-                _new = build_all_raids(
-                    st.session_state["_players_by_day"],
-                    st.session_state["_dyn_fixed"],
-                    st.session_state["_buddy_groups"],
-                    st.session_state["day_info"],
-                    st.session_state["_avoid_pairs"],
-                    parse_group_sel,
-                    parse_boost_val,
-                )
-                st.session_state["results"]         = _new
-                st.session_state["_last_pg_label"]  = parse_group_sel
-                st.session_state["_last_pg_boost"]  = parse_boost_val
-                st.rerun()
+            st.selectbox("Which group?", options=known_keys, key="parse_group_sel")
+            st.slider("Boost strength", min_value=50, max_value=300, value=150, step=50,
+                      key="parse_boost_val",
+                      help="50 = subtle  ·  150 = noticeable  ·  300 = strong")
+            st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.75rem;color:#5a4a28'>
+            ↑ Change settings, then click <b>Apply Parse Group</b> below.</div>""",
+            unsafe_allow_html=True)
         else:
             st.caption("Calculate first, then select a group here.")
-            parse_group_sel = ""
-            parse_boost_val = 150
-    else:
-        parse_group_sel = ""
-        parse_boost_val = 0
-        # Rebuild without boost when parse group is deactivated
-        if st.session_state.get("_last_pg_label", "") != "" and "_players_by_day" in st.session_state:
-            st.session_state["results"] = build_all_raids(
-                st.session_state["_players_by_day"],
-                st.session_state["_dyn_fixed"],
-                st.session_state["_buddy_groups"],
-                st.session_state["day_info"],
-                st.session_state["_avoid_pairs"],
-                "", 0,
-            )
-            st.session_state["_last_pg_label"] = ""
-            st.session_state["_last_pg_boost"]  = -1
-            st.rerun()
+
 
 
     # ── Role Overrides + Fixed + Buddies + Avoid (collapsed by default)
@@ -866,6 +825,35 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
     })
     st.rerun()
 
+# ── PARSE GROUP APPLY (shown when results exist + parse group active)
+if "results" in st.session_state and st.session_state.get("enable_parse_group"):
+    _pg_sel   = st.session_state.get("parse_group_sel", "")
+    _pg_boost = st.session_state.get("parse_boost_val", 150)
+    known_keys = [k for k in st.session_state["results"] if "Bench" not in k]
+
+    if _pg_sel and _pg_sel in known_keys and "_players_by_day" in st.session_state:
+        col_info, col_btn = st.columns([3, 1])
+        with col_info:
+            st.markdown(
+                f'<div class="ib">🏆 Parse Group: <b>{_pg_sel}</b> &nbsp;·&nbsp; ' +
+                f'Boost: <b>{_pg_boost}</b></div>',
+                unsafe_allow_html=True,
+            )
+        with col_btn:
+            if st.button("🔄 Apply", use_container_width=True,
+                         help="Recalculate with current Parse Group settings"):
+                _new = build_all_raids(
+                    st.session_state["_players_by_day"],
+                    st.session_state["_dyn_fixed"],
+                    st.session_state["_buddy_groups"],
+                    st.session_state["day_info"],
+                    st.session_state["_avoid_pairs"],
+                    _pg_sel,
+                    _pg_boost,
+                )
+                st.session_state["results"] = _new
+                st.rerun()
+
 # ── STEP 3
 if "results" not in st.session_state:
     st.markdown("""<div style='text-align:center;padding:5rem 2rem;color:#2e2410'>
@@ -932,6 +920,7 @@ all_valid     = True
 val_cols      = st.columns(max(len(raid_keys),1))
 _active_parse = st.session_state.get("enable_parse_group", False)
 _parse_label  = st.session_state.get("parse_group_sel", "") if _active_parse else ""
+_parse_boost  = st.session_state.get("parse_boost_val", 0)  if _active_parse else 0
 
 for ci,label in enumerate(raid_keys):
     g     = edited_groups.get(label,[])
