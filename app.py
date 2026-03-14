@@ -691,14 +691,38 @@ with st.sidebar:
     enable_parse_group = st.checkbox("Activate Parse Group", value=False, key="enable_parse_group")
     if enable_parse_group:
         st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.78rem;color:#5a4a28'>
-        Select <em>after</em> first calculation. This group gets better buffs when possible —
-        but all groups stay playable and fair.</div>""", unsafe_allow_html=True)
+        Select after first calculation. Updates automatically when you change settings.</div>""",
+        unsafe_allow_html=True)
         known_keys = [k for k in st.session_state.get("results",{}) if "Bench" not in k]
         if known_keys:
-            parse_group_sel = st.selectbox("Which group?", options=known_keys, key="parse_group_sel")
+            prev_sel   = st.session_state.get("_last_pg_label", known_keys[0])
+            prev_boost = st.session_state.get("_last_pg_boost", 150)
+            if prev_sel not in known_keys:
+                prev_sel = known_keys[0]
+            parse_group_sel = st.selectbox("Which group?", options=known_keys,
+                                            index=known_keys.index(prev_sel),
+                                            key="parse_group_sel")
             parse_boost_val = st.slider("Boost strength", min_value=50, max_value=300,
-                                         value=150, step=50, key="parse_boost_val",
-                                         help="How strongly buffs are steered towards parse group. 150 = noticeable but fair.")
+                                         value=int(prev_boost) if prev_boost != -1 else 150,
+                                         step=50, key="parse_boost_val",
+                                         help="50 = subtle  ·  150 = noticeable  ·  300 = strong")
+            # Auto-rebuild immediately when settings change — no re-fetch needed
+            _pg_changed = (parse_group_sel != st.session_state.get("_last_pg_label","") or
+                           parse_boost_val != st.session_state.get("_last_pg_boost", -1))
+            if _pg_changed and "_players_by_day" in st.session_state:
+                _new = build_all_raids(
+                    st.session_state["_players_by_day"],
+                    st.session_state["_dyn_fixed"],
+                    st.session_state["_buddy_groups"],
+                    st.session_state["day_info"],
+                    st.session_state["_avoid_pairs"],
+                    parse_group_sel,
+                    parse_boost_val,
+                )
+                st.session_state["results"]         = _new
+                st.session_state["_last_pg_label"]  = parse_group_sel
+                st.session_state["_last_pg_boost"]  = parse_boost_val
+                st.rerun()
         else:
             st.caption("Calculate first, then select a group here.")
             parse_group_sel = ""
@@ -706,6 +730,20 @@ with st.sidebar:
     else:
         parse_group_sel = ""
         parse_boost_val = 0
+        # Rebuild without boost when parse group is deactivated
+        if st.session_state.get("_last_pg_label", "") != "" and "_players_by_day" in st.session_state:
+            st.session_state["results"] = build_all_raids(
+                st.session_state["_players_by_day"],
+                st.session_state["_dyn_fixed"],
+                st.session_state["_buddy_groups"],
+                st.session_state["day_info"],
+                st.session_state["_avoid_pairs"],
+                "", 0,
+            )
+            st.session_state["_last_pg_label"] = ""
+            st.session_state["_last_pg_boost"]  = -1
+            st.rerun()
+
 
     # ── Role Overrides + Fixed + Buddies + Avoid (collapsed by default)
     st.markdown("---")
@@ -810,9 +848,22 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
 
     _pg_label = st.session_state.get("parse_group_sel", "") if st.session_state.get("enable_parse_group") else ""
     _pg_boost = st.session_state.get("parse_boost_val", 0) if st.session_state.get("enable_parse_group") else 0
-    results = build_all_raids(players_by_day, dyn_fixed, buddy_groups, day_info, avoid_pairs, _pg_label, _pg_boost)
-    st.session_state.update({"results":results,"selected_events":selected_events,
-        "api_key_used":api_key,"demo_mode":demo_mode,"debug_raw":debug_raw,"day_info":day_info})
+    results   = build_all_raids(players_by_day, dyn_fixed, buddy_groups, day_info, avoid_pairs, _pg_label, _pg_boost)
+    # Store everything needed for live-rebuild when parse settings change
+    st.session_state.update({
+        "results":         results,
+        "selected_events": selected_events,
+        "api_key_used":    api_key,
+        "demo_mode":       demo_mode,
+        "debug_raw":       debug_raw,
+        "day_info":        day_info,
+        # Rebuild ingredients (no re-fetch needed)
+        "_players_by_day": players_by_day,
+        "_dyn_fixed":      dyn_fixed,
+        "_buddy_groups":   buddy_groups,
+        "_avoid_pairs":    avoid_pairs,
+        "_fixed_raw":      fixed_raw,
+    })
     st.rerun()
 
 # ── STEP 3
