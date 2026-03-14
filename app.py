@@ -539,14 +539,20 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
 
         def _key(entry):
             _, lbl = entry
-            rn  = _role_need(p.role, lbl)
-            # Parse boost only for the designated group
-            pb  = parse_boost if lbl == parse_group_label else 0
-            sg  = score_gain(p, results[lbl], parse_boost=pb)
-            # Equity: groups below average pull harder (weight 0.6)
-            eq  = max(0, avg - _cur_score(lbl)) * 0.6
-            fr  = _free(lbl)
-            return (-rn, -(sg + eq), -fr, entry[0])
+            rn = _role_need(p.role, lbl)
+            sg = score_gain(p, results[lbl])
+            eq = max(0, avg - _cur_score(lbl)) * 0.6
+            fr = _free(lbl)
+
+            if parse_group_label and lbl == parse_group_label:
+                # Parse group boost: added directly to role_need weight so it
+                # can actually compete with other groups that have more open slots.
+                # Convert parse_boost (50-300) to a fractional role_need bonus
+                # (e.g. boost=300 → +1.5 virtual role slots → strong preference).
+                pg_rn_bonus = (parse_boost / 200.0)
+                return (-(rn + pg_rn_bonus), -(sg + eq + parse_boost), -fr, entry[0])
+            else:
+                return (-rn, -(sg + eq), -fr, entry[0])
 
         cands.sort(key=_key)
         _, best_lbl = cands[0]
