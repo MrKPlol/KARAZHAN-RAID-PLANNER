@@ -285,21 +285,35 @@ def fetch_event_detail(event_id: str, api_key: str) -> dict:
         st.error(f"Network: {e}"); return {}
 
 def push_composition(event_id: str, api_key: str, players: list) -> tuple:
-    url     = f"{API_BASE}/v3/comps/{event_id}"
-    payload = []
-    sg1 = [p for p in players if p.get("subgroup",1) == 1]
-    sg2 = [p for p in players if p.get("subgroup",1) == 2]
-    for gid, grp in enumerate([sg1,sg2], 1):
-        for pos, p in enumerate(grp, 1):
-            payload.append({"userId":p.get("user_id",""),"name":p.get("name",""),
-                             "groupId":gid,"position":pos})
+    """
+    PATCH /api/v3/comps/COMPID
+    Comp ID = Event ID (confirmed from Raid-Helper JSON structure).
+    Payload: {"slots": [{name, className, specName, isConfirmed, groupNumber, slotNumber}]}
+    groupNumber 1 = SG1 (Casters), groupNumber 2 = SG2 (Melee)
+    """
+    url   = f"{API_BASE}/v3/comps/{event_id}"
+    slots = []
+    sg1   = [p for p in players if p.get("subgroup", 1) == 1]
+    sg2   = [p for p in players if p.get("subgroup", 1) == 2]
+    for group_num, grp in enumerate([sg1, sg2], 1):
+        for slot_num, p in enumerate(grp, 1):
+            slots.append({
+                "name":        p.get("name", ""),
+                "className":   p.get("class_name", p.get("className", "")),
+                "specName":    p.get("spec", p.get("specName", "")),
+                "isConfirmed": "confirmed",
+                "groupNumber": group_num,
+                "slotNumber":  slot_num,
+            })
     try:
-        r = requests.post(url, headers=_headers(api_key), json=payload, timeout=15)
-        r.raise_for_status(); return True,"Success"
+        r = requests.patch(url, headers=_headers(api_key),
+                           json={"slots": slots}, timeout=15)
+        r.raise_for_status()
+        return True, "Success"
     except requests.HTTPError as e:
-        return False,f"{e.response.status_code}: {e.response.text[:300]}"
+        return False, f"{e.response.status_code}: {e.response.text[:300]}"
     except Exception as e:
-        return False,str(e)
+        return False, str(e)
 
 # ── EVENT HELPERS
 def _event_ts(e: dict) -> int:
@@ -1115,8 +1129,12 @@ else:
                 for i,label in enumerate([k for k in edited_groups if "Bench" not in k]):
                     if i >= len(sel_events): break
                     eid = str(sel_events[i].get("id",""))
-                    pdicts = [{"user_id":p.user_id,"name":p.name,"subgroup":p.subgroup}
-                              for p in results.get(label,[])]
+                    pdicts = [{
+                                  "name":       p.name,
+                                  "class_name": p.class_name,
+                                  "spec":       p.spec,
+                                  "subgroup":   p.subgroup,
+                              } for p in results.get(label,[])]
                     ok,msg = push_composition(eid, api_key_sess, pdicts)
                     (successes if ok else errors).append(label if ok else f"{label}: {msg}")
                 if successes:
