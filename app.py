@@ -135,9 +135,9 @@ def score_gain(player: Player, group: list, parse_boost: int = 0) -> int:
         if shaman_cnt == 0:
             score += 300    # First Shaman = huge value (BL)
         elif shaman_cnt == 1:
-            score -= 80     # Second Shaman = BL already covered, totems overlap
+            score += 60     # Second Shaman = great! Windfury (Melee) + Wrath of Air (Casters)
         else:
-            score -= 150    # Third+ Shaman = really wasteful
+            score -= 150    # Third+ Shaman = too many, diminishing returns
 
     # Warlock — CoE (+10% magic dmg), Healthstone, Soulstone
     if cls == "warlock":
