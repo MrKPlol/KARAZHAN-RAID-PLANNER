@@ -301,7 +301,7 @@ def push_composition(event_id: str, api_key: str, players: list) -> tuple:
                 "name":        p.get("name", ""),
                 "className":   p.get("class_name", p.get("className", "")),
                 "specName":    p.get("spec", p.get("specName", "")),
-                "isConfirmed": "confirmed",
+                "isConfirmed": "unconfirmed",
                 "groupNumber": group_num,
                 "slotNumber":  slot_num,
             })
