@@ -62,6 +62,8 @@ TARGET         = {"Tank":1,"Healer":2,"DPS":7}
 RAID_SIZE      = 10
 KARA_KEYWORDS  = ["kara","karazhan","karaz"]
 
+APP_VERSION = "v1.6.0"  # Major.Minor.Patch — bump manually on each release
+
 DEFAULT_BUDDIES  = "Ketaminkåre,Tuva\nMiroga,Terry,Vowly\nXylvia,Rockedw\nMb,Langballje\nStone,Pumpyy"
 DEFAULT_FIXED    = "Stone=Monday\nPumpyy=Monday"
 DEFAULT_OVERRIDES= "Stone=Tank"
@@ -673,11 +675,13 @@ section[data-testid="stSidebar"]{background:#0a0a14 !important;border-right:1px 
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
+st.markdown(f"""
 <div class="kh">
   <div class="kh-title">🏰 KARAZHAN RAID PLANNER</div>
   <div class="gold-div"></div>
   <div class="kh-sub">R2 — Make Raids Great Again &nbsp;·&nbsp; TBC Classic Anniversary</div>
+  <div style="font-family:'Crimson Pro',serif;font-size:.7rem;color:#3a2a10;
+              margin-top:.35rem;letter-spacing:.15em">{APP_VERSION}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -738,9 +742,10 @@ with st.sidebar:
         avoid_raw = st.text_area("Pairs", value=DEFAULT_AVOID, height=80, label_visibility="collapsed", key="avoid_input")
 
     st.markdown("---")
-    st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.72rem;color:#3a2e18;line-height:1.6'>
+    st.markdown(f"""<div style='font-family:"Crimson Pro",serif;font-size:.72rem;color:#3a2e18;line-height:1.6'>
     1T·2H·7D &nbsp;|&nbsp; BL·Warlock·Paladin·SPriest·Druid·Hunter·Mage<br>
-    Equity: all groups get fair buffs &nbsp;|&nbsp; SG1=Casters · SG2=Melee
+    Equity: all groups get fair buffs &nbsp;|&nbsp; SG1=Casters · SG2=Melee<br>
+    <span style='color:#2a2010'>Karazhan Raid Planner {APP_VERSION}</span>
     </div>""", unsafe_allow_html=True)
 
 role_overrides    = parse_role_overrides(override_raw)
