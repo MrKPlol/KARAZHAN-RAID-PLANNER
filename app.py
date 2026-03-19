@@ -63,31 +63,18 @@ RAID_SIZE      = 10
 KARA_KEYWORDS  = ["kara","karazhan","karaz"]
 
 def _get_version() -> str:
-    """Auto-version from git: tag if available, else short commit hash + date."""
+    """Always returns the latest git tag — clean, no commit counter."""
     import subprocess, os
     try:
         tag = subprocess.check_output(
             ["git", "describe", "--tags", "--abbrev=0"],
             stderr=subprocess.DEVNULL, cwd=os.path.dirname(os.path.abspath(__file__))
         ).decode().strip()
-        # Also get commits since last tag
-        commits = subprocess.check_output(
-            ["git", "rev-list", f"{tag}..HEAD", "--count"],
-            stderr=subprocess.DEVNULL, cwd=os.path.dirname(os.path.abspath(__file__))
-        ).decode().strip()
-        if commits and commits != "0":
-            return f"{tag}+{commits}"
-        return tag
+        if tag:
+            return tag
     except Exception:
         pass
-    try:
-        sha = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL, cwd=os.path.dirname(os.path.abspath(__file__))
-        ).decode().strip()
-        return f"v1.7.0-{sha}" if sha else "v1.7.0"
-    except Exception:
-        return "v1.7.0"
+    return "v1.7.2"  # fallback if no git available (e.g. Streamlit Cloud)
 
 APP_VERSION = _get_version()
 
