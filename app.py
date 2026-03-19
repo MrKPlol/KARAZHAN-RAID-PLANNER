@@ -63,18 +63,14 @@ RAID_SIZE      = 10
 KARA_KEYWORDS  = ["kara","karazhan","karaz"]
 
 def _get_version() -> str:
-    """Always returns the latest git tag — clean, no commit counter."""
-    import subprocess, os
+    """Read version from VERSION file next to app.py — single source of truth."""
+    import os
     try:
-        tag = subprocess.check_output(
-            ["git", "describe", "--tags", "--abbrev=0"],
-            stderr=subprocess.DEVNULL, cwd=os.path.dirname(os.path.abspath(__file__))
-        ).decode().strip()
-        if tag:
-            return tag
+        version_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+        with open(version_file, "r") as f:
+            return f.read().strip()
     except Exception:
-        pass
-    return "v1.7.2"  # fallback if no git available (e.g. Streamlit Cloud)
+        return "v1.7.2"
 
 APP_VERSION = _get_version()
 
