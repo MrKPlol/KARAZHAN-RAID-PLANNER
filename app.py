@@ -246,66 +246,83 @@ def _is_caster_dps(p) -> bool:
     return False
 
 
+def _is_prot_pala(p) -> bool:
+    cls  = p.class_name.lower()
+    spec = p.spec.lower()
+    return cls == "paladin" and ("protection" in spec or "prot" in spec)
+
+
 def assign_subgroups(players: list) -> list:
     """
-    SG1 (Casters):  Tank · Healers · Caster DPS (Warlock, Mage, SPriest, Ele Shaman, Boomkin)
-    SG2 (Melee):    Melee DPS · Hunter · Enh Shaman
-    Priority: role-specific placement first, overflow goes where space exists.
+    If tank is Prot Paladin:  SG1 = Casters,  SG2 = Melee
+    If tank is Druid/Warrior: SG1 = Melee,    SG2 = Casters
+    The group containing the tank is always SG1.
     """
+    # Determine tank type to decide which group is SG1
+    tanks = [p for p in players if p.role == "Tank"]
+    pala_tank = any(_is_prot_pala(p) for p in tanks)
+    # pala_tank=True  → SG1=Casters, SG2=Melee  (default)
+    # pala_tank=False → SG1=Melee,   SG2=Casters (swap)
+
+    caster_sg = 1 if pala_tank else 2
+    melee_sg  = 2 if pala_tank else 1
+
     sg1, sg2 = [], []
 
     def add(p, sg):
         p.subgroup = sg
         (sg1 if sg == 1 else sg2).append(p)
 
-    # 1. Tank placement:
-    # Prot Paladin → SG1 (Casters) — benefits from Int/Wrath of Air, provides Wisdom/Salv
-    # All other tanks (Druid, Warrior) → SG2 (Melee) — physical fighters, no caster synergy
+    # 1. Tank → into its natural group
     for p in players:
         if p.role == "Tank":
-            cls  = p.class_name.lower()
-            spec = p.spec.lower()
-            if cls == "paladin" and ("protection" in spec or "prot" in spec):
-                add(p, 1)
+            if _is_prot_pala(p):
+                add(p, caster_sg)
             else:
-                add(p, 2)
+                add(p, melee_sg)
 
-    # 2. Healers → SG1 first, overflow to SG2
+    # 2. Healers → caster group first, overflow to melee group
     for p in players:
         if p.role == "Healer" and p not in sg1+sg2:
-            add(p, 1) if len(sg1) < 5 else add(p, 2)
+            add(p, caster_sg) if len(sg1 if caster_sg==1 else sg2) < 5 else add(p, melee_sg)
 
     dps      = [p for p in players if p.role == "DPS"]
     cast_dps = [p for p in dps if _is_caster_dps(p)]
     mele_dps = [p for p in dps if not _is_caster_dps(p)]
 
-    # 3. Caster DPS → SG1 preferred; if SG1 full, bump a melee from SG1 to SG2 to make room
+    # 3. Caster DPS → caster group preferred; swap a melee out if needed
     for p in cast_dps:
         if p in sg1+sg2: continue
-        if len(sg1) < 5:
-            add(p, 1)
+        csg = sg1 if caster_sg == 1 else sg2
+        msg = sg1 if melee_sg  == 1 else sg2
+        if len(csg) < 5:
+            add(p, caster_sg)
         else:
-            # Try to swap a melee already in SG1 out to SG2
-            melee_in_sg1 = [x for x in sg1 if _is_caster_dps(x) is False and x.role == "DPS"]
-            if melee_in_sg1 and len(sg2) < 5:
-                swap = melee_in_sg1[-1]
-                sg1.remove(swap)
-                swap.subgroup = 2
-                sg2.append(swap)
-                add(p, 1)
-            elif len(sg2) < 5:
-                add(p, 2)  # no room anywhere in SG1, go to SG2
+            melee_in_csg = [x for x in csg if not _is_caster_dps(x) and x.role == "DPS"]
+            if melee_in_csg and len(msg) < 5:
+                swap = melee_in_csg[-1]
+                csg.remove(swap)
+                swap.subgroup = melee_sg
+                msg.append(swap)
+                add(p, caster_sg)
+            elif len(msg) < 5:
+                add(p, melee_sg)
 
-    # 4. Melee DPS → SG2 preferred
+    # 4. Melee DPS → melee group preferred
     for p in mele_dps:
         if p in sg1+sg2: continue
-        add(p, 2) if len(sg2) < 5 else add(p, 1) if len(sg1) < 5 else None
+        msg = sg1 if melee_sg == 1 else sg2
+        csg = sg1 if caster_sg == 1 else sg2
+        add(p, melee_sg) if len(msg) < 5 else add(p, caster_sg) if len(csg) < 5 else None
 
     # 5. Overflow
     for p in players:
         if p not in sg1+sg2:
             if len(sg1) < 5:   add(p, 1)
             elif len(sg2) < 5: add(p, 2)
+
+    # 6. Fix labels in discord export: SG1 always contains the tank
+    #    (already correct since we used sg_num() above)
 
     return sg1+sg2
 
@@ -718,16 +735,24 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
 
 # ── DISCORD EXPORT
 def discord_block(label: str, players: list) -> str:
+    # Determine SG labels based on tank type
+    tanks     = [p for p in players if getattr(p,"role","DPS") == "Tank"]
+    pala_tank = any(_is_prot_pala(p) for p in tanks) if tanks else True
+    sg_labels = {
+        1: ("🔷", "Subgroup 1 — Casters" if pala_tank else "🔶 Subgroup 1 — Melee"),
+        2: ("🔶", "Subgroup 2 — Melee"   if pala_tank else "🔷 Subgroup 2 — Casters"),
+    }
     lines = [f"**{label}**  [{len(players)}/10]",""]
-    for sg,sg_lbl in [(1,"🔷 Subgroup 1 — Casters"),(2,"🔶 Subgroup 2 — Melee")]:
+    for sg in [1, 2]:
         sgt = [p for p in players if getattr(p,"subgroup",1)==sg]
         if not sgt: continue
-        lines.append(f"**{sg_lbl}**")
+        em, sg_lbl = sg_labels[sg]
+        lines.append(f"**{em} {sg_lbl}**")
         for role in ["Tank","Healer","DPS"]:
             for p in [x for x in sgt if x.role==role]:
-                em   = CLASS_EMOJI.get(p.class_name.lower(),"")
-                spec = p.spec or p.class_name.title()
-                lines.append(f"  {ROLE_EMOJI_MAP[role]} {em} {p.name} — {spec}")
+                cls_em = CLASS_EMOJI.get(p.class_name.lower(),"")
+                spec   = p.spec or p.class_name.title()
+                lines.append(f"  {ROLE_EMOJI_MAP[role]} {cls_em} {p.name} — {spec}")
         lines.append("")
     return "\n".join(lines).strip()
 
