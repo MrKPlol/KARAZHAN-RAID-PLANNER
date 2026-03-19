@@ -135,8 +135,8 @@ def score_gain(player: Player, group: list, parse_boost: int = 0) -> int:
 
     # Warlock — CoE (+10% magic dmg), Healthstone, Soulstone
     if cls == "warlock":
-        score += 0 if _has(group,"warlock") else 150
-        if _has(group,"warlock"): score -= 30
+        score += 0 if _has(group,"warlock") else 100
+        if _has(group,"warlock"): score -= 20
 
     # Paladin — Blessings (Kings/Salv/Wisdom), Auras, BoP, Lay on Hands
     if cls == "paladin":
@@ -148,7 +148,7 @@ def score_gain(player: Player, group: list, parse_boost: int = 0) -> int:
 
     # Shadow Priest — Shadow Weaving (13% shadow dmg), Vampiric Touch (mana regen)
     if cls == "priest" and "shadow" in spec:
-        score += 0 if _spec_match(group,"priest","shadow") else 100
+        score += 0 if _spec_match(group,"priest","shadow") else 60
 
     # Balance Druid — Moonkin Aura (+5% spell crit for whole group)
     if cls == "druid" and any(f in spec for f in ("balance","moonkin","boomkin")):
@@ -156,15 +156,15 @@ def score_gain(player: Player, group: list, parse_boost: int = 0) -> int:
 
     # Druid (any) — Innervate, Mark of the Wild, Rebirth (combat rez!)
     if cls == "druid":
-        score += 0 if _has(group,"druid") else 60
+        score += 0 if _has(group,"druid") else 100
 
     # Mage — Arcane Brilliance, Spellsteal, Polymorph CC, Curse removal
     if cls == "mage":
         score += 0 if _has(group,"mage") else 50
 
     # Synergy: Shadow Priest + Warlock (Shadow Weaving × CoE = best caster combo)
-    if cls == "priest" and "shadow" in spec and _has(group,"warlock"): score += 50
-    if cls == "warlock" and _spec_match(group,"priest","shadow"):       score += 50
+    if cls == "priest" and "shadow" in spec and _has(group,"warlock"): score += 100
+    if cls == "warlock" and _spec_match(group,"priest","shadow"):       score += 100
 
     # Curse removal (Mage or Druid — helpful for Curator, Maiden, others)
     if cls in ("mage","druid") and not (_has(group,"mage") or _has(group,"druid")):
@@ -198,17 +198,17 @@ def group_score(group: list) -> int:
     specs   = [(p.class_name.lower(), p.spec.lower()) for p in group]
 
     score += 300 if "shaman"  in classes else -200
-    score += 150 if "warlock" in classes else 0
+    score += 100 if "warlock" in classes else 0
     score += 120 if "paladin" in classes else 0
     score += 80  if "hunter"  in classes else 0
-    score += 60  if "druid"   in classes else 0
+    score += 100 if "druid"   in classes else 0
     score += 50  if "mage"    in classes else 0
 
-    if any(c=="priest" and "shadow" in s for c,s in specs):   score += 100
+    if any(c=="priest" and "shadow" in s for c,s in specs):   score += 60
     if any(c=="druid"  and any(f in s for f in ("balance","moonkin")) for c,s in specs): score += 70
 
     has_spr = any(c=="priest" and "shadow" in s for c,s in specs)
-    if has_spr and "warlock" in classes: score += 50
+    if has_spr and "warlock" in classes: score += 100
 
     dps   = [p for p in group if p.role=="DPS"]
     melee = sum(1 for p in dps if is_melee(p))
