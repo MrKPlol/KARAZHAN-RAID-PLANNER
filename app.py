@@ -528,23 +528,31 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
     for p in all_players:
         if len(p.avail_days)==1: excl_count[p.avail_days[0]] += 1
 
+    # Raid slot logic:
+    # - Goal: always fill up to 3 raids total across all selected events
+    # - Each event starts with 1 slot if ≥10 sign-ups, 0 if fewer
+    # - A/B split (2 slots on one day) is always allowed if ≥18 exclusive sign-ups
+    # - The boost loop fills remaining slots on the busiest day until total = 3
+    # - Max 3 raids ever (max 2 slots per day)
+    MAX_RAIDS = 3
+
     raids_per_day: dict = {}
     for d in all_day_idxs:
-        excl = excl_count.get(d,0)
-        raids_per_day[d] = 2 if excl>=18 else (1 if raw_count.get(d,0)>=10 else 0)
+        excl = excl_count.get(d, 0)
+        # Always create at least 1 slot per selected event — even with <10 sign-ups.
+        # Exclusive players must always have a home; leftovers fill in via Pass 3.
+        # A/B split only when ≥18 exclusive sign-ups on that day.
+        raids_per_day[d] = 2 if excl >= 18 else 1
 
     total  = sum(raids_per_day.values())
-    # target = one raid per selected event — never open a 2nd slot on one day
-    # just to hit a fixed number. A/B split only happens with ≥18 exclusive sign-ups.
-    target_raids = len(all_day_idxs)
-    active = sorted([d for d in all_day_idxs if raw_count.get(d,0)>=10],
-                    key=lambda d: -raw_count.get(d,0))
-    while total < target_raids and active:
+    active = sorted([d for d in all_day_idxs if raw_count.get(d, 0) >= 10],
+                    key=lambda d: -raw_count.get(d, 0))
+    while total < MAX_RAIDS and active:
         bumped = False
         for d in active:
-            if total >= target_raids: break
-            if raids_per_day.get(d,0) < 2 and raw_count.get(d,0) >= 10:
-                raids_per_day[d] = raids_per_day.get(d,0)+1; total+=1; bumped=True
+            if total >= MAX_RAIDS: break
+            if raids_per_day.get(d, 0) < 2 and raw_count.get(d, 0) >= 10:
+                raids_per_day[d] += 1; total += 1; bumped = True
         if not bumped: break
 
     slot_labels: list[tuple] = []
