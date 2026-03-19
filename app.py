@@ -131,7 +131,13 @@ def score_gain(player: Player, group: list, parse_boost: int = 0) -> int:
 
     # Bloodlust/Heroism — most impactful buff in Kara
     if cls == "shaman":
-        score += 0 if _has(group,"shaman") else 300
+        shaman_cnt = sum(1 for x in group if x.class_name.lower() == "shaman")
+        if shaman_cnt == 0:
+            score += 300    # First Shaman = huge value (BL)
+        elif shaman_cnt == 1:
+            score -= 80     # Second Shaman = BL already covered, totems overlap
+        else:
+            score -= 150    # Third+ Shaman = really wasteful
 
     # Warlock — CoE (+10% magic dmg), Healthstone, Soulstone
     if cls == "warlock":
@@ -229,30 +235,71 @@ def score_label(s: int) -> tuple:
     return "⚠️","#e06040"
 
 # ── SUBGROUP ASSIGNMENT
+def _is_caster_dps(p) -> bool:
+    """True if this DPS belongs in the caster subgroup."""
+    cls  = p.class_name.lower()
+    spec = p.spec.lower()
+    if cls in ("warlock", "mage"): return True
+    if cls == "priest":            return True   # Shadow Priest → caster group
+    if cls == "shaman" and "elemental" in spec: return True
+    if cls == "druid"  and any(f in spec for f in ("balance","moonkin","boomkin")): return True
+    return False
+
+
 def assign_subgroups(players: list) -> list:
+    """
+    SG1 (Casters):  Tank · Healers · Caster DPS (Warlock, Mage, SPriest, Ele Shaman, Boomkin)
+    SG2 (Melee):    Melee DPS · Hunter · Enh Shaman
+    Priority: role-specific placement first, overflow goes where space exists.
+    """
     sg1, sg2 = [], []
+
     def add(p, sg):
         p.subgroup = sg
         (sg1 if sg == 1 else sg2).append(p)
-    def best(p):
-        if len(sg1) < 5: add(p, 1)
-        elif len(sg2) < 5: add(p, 2)
+
+    # 1. Tank → always SG1
     for p in players:
-        if p.role == "Tank": add(p, 1)
+        if p.role == "Tank":
+            add(p, 1)
+
+    # 2. Healers → SG1 first, overflow to SG2
     for p in players:
         if p.role == "Healer" and p not in sg1+sg2:
             add(p, 1) if len(sg1) < 5 else add(p, 2)
-    dps     = [p for p in players if p.role == "DPS"]
-    melee_d = [p for p in dps if is_melee(p) or p.class_name.lower() == "hunter"]
-    cast_d  = [p for p in dps if p not in melee_d]
-    for p in cast_d:
-        if p not in sg1+sg2:
-            add(p,1) if len(sg1) < 5 else add(p,2) if len(sg2) < 5 else None
-    for p in melee_d:
-        if p not in sg1+sg2:
-            add(p,2) if len(sg2) < 5 else add(p,1) if len(sg1) < 5 else None
+
+    dps      = [p for p in players if p.role == "DPS"]
+    cast_dps = [p for p in dps if _is_caster_dps(p)]
+    mele_dps = [p for p in dps if not _is_caster_dps(p)]
+
+    # 3. Caster DPS → SG1 preferred; if SG1 full, bump a melee from SG1 to SG2 to make room
+    for p in cast_dps:
+        if p in sg1+sg2: continue
+        if len(sg1) < 5:
+            add(p, 1)
+        else:
+            # Try to swap a melee already in SG1 out to SG2
+            melee_in_sg1 = [x for x in sg1 if _is_caster_dps(x) is False and x.role == "DPS"]
+            if melee_in_sg1 and len(sg2) < 5:
+                swap = melee_in_sg1[-1]
+                sg1.remove(swap)
+                swap.subgroup = 2
+                sg2.append(swap)
+                add(p, 1)
+            elif len(sg2) < 5:
+                add(p, 2)  # no room anywhere in SG1, go to SG2
+
+    # 4. Melee DPS → SG2 preferred
+    for p in mele_dps:
+        if p in sg1+sg2: continue
+        add(p, 2) if len(sg2) < 5 else add(p, 1) if len(sg1) < 5 else None
+
+    # 5. Overflow
     for p in players:
-        if p not in sg1+sg2: best(p)
+        if p not in sg1+sg2:
+            if len(sg1) < 5:   add(p, 1)
+            elif len(sg2) < 5: add(p, 2)
+
     return sg1+sg2
 
 # ── API HELPERS
@@ -1115,7 +1162,18 @@ if keys_to_export:
     tabs = st.tabs(keys_to_export)
     for tab,label in zip(tabs,keys_to_export):
         with tab:
-            export_players = results.get(label,[])
+            if label == bench_key:
+                export_players = results.get(label, [])
+            else:
+                # Use edited_groups so manual role/group changes are reflected
+                class _EP:
+                    def __init__(self, d):
+                        self.name       = d.get("Name", "?")
+                        self.class_name = d.get("Class", "").lower()
+                        self.spec       = d.get("Spec", "—")
+                        self.role       = d.get("Role", "DPS")
+                        self.subgroup   = int(d.get("SG", 1))
+                export_players = [_EP(r) for r in edited_groups.get(label, [])]
             st.code(discord_block(label, export_players), language=None)
             st.caption("📋 Click the copy icon (top-right) to copy.")
 
@@ -1139,12 +1197,13 @@ else:
                 for i,label in enumerate([k for k in edited_groups if "Bench" not in k]):
                     if i >= len(sel_events): break
                     eid = str(sel_events[i].get("id",""))
+                    # Use edited_groups so manual changes are reflected in push
                     pdicts = [{
-                                  "name":       p.name,
-                                  "class_name": p.class_name,
-                                  "spec":       p.spec,
-                                  "subgroup":   p.subgroup,
-                              } for p in results.get(label,[])]
+                                  "name":       r.get("Name", ""),
+                                  "class_name": r.get("Class", "").lower(),
+                                  "spec":       r.get("Spec", ""),
+                                  "subgroup":   int(r.get("SG", 1)),
+                              } for r in edited_groups.get(label, [])]
                     ok,msg = push_composition(eid, api_key_sess, pdicts)
                     (successes if ok else errors).append(label if ok else f"{label}: {msg}")
                 if successes:
