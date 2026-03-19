@@ -64,10 +64,11 @@ KARA_KEYWORDS  = ["kara","karazhan","karaz"]
 
 APP_VERSION = "v1.6.0"  # Major.Minor.Patch — bump manually on each release
 
-DEFAULT_BUDDIES  = "Ketaminkåre,Tuva\nMiroga,Terry,Vowly\nXylvia,Rockedw\nMb,Langballje\nStone,Pumpyy"
+DEFAULT_BUDDIES  = "Ketaminkåre,Tuva\nMiroga,Terry,Vowly\nXylvia,Rock\nMb,Langballje\nStone,Pumpyy"
 DEFAULT_FIXED    = "Stone=Monday\nPumpyy=Monday"
 DEFAULT_OVERRIDES= "Stone=Tank"
 DEFAULT_AVOID    = "Vowly=!Vapecum"
+DEFAULT_BUDDY_CHAR  = "Rock=Paladin"  # For buddy logic only: use this char. Other chars raid freely.
 
 # ── DATA CLASS
 @dataclass
@@ -366,6 +367,7 @@ def parse_signups(event_data: dict, day_idx: int, strict: bool, role_overrides: 
         if cls == "tank":
             real_cls = RAIDHELPER_TANK_SPEC_TO_CLASS.get(spec.lower().strip())
             if real_cls: cls = real_cls
+
         players.append(Player(user_id=uid or name, name=name, class_name=cls,
                                spec=spec, role=role, avail_days=[day_idx]))
     return players
@@ -412,6 +414,26 @@ def parse_avoid_pairings(raw: str) -> list:
         if a and b: pairs.append({a,b})
     return pairs
 
+def parse_buddy_char(raw: str) -> dict:
+    """
+    Format: Name=Class  →  {name_lower: class_lower}
+    For buddy matching only: when this player has multiple chars in the pool,
+    only the specified class is included in buddy group logic.
+    ALL chars can still raid — this only affects buddy day-restriction.
+    """
+    result: dict = {}
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, cls = line.partition("=")
+        name = name.strip().lower()
+        cls  = cls.strip().lower()
+        if name and cls:
+            result[name] = cls
+    return result
+
+
 # ── ALGORITHM
 def _avoid_conflict(player: Player, group: list, avoid_pairs: list) -> bool:
     names = {p.name_lower for p in group}
@@ -422,10 +444,12 @@ def _avoid_conflict(player: Player, group: list, avoid_pairs: list) -> bool:
 
 def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups: list,
                     day_info: dict | None = None, avoid_pairs: list | None = None,
-                    parse_group_label: str = "", parse_boost: int = 0) -> dict:
+                    parse_group_label: str = "", parse_boost: int = 0,
+                    buddy_char: dict | None = None) -> dict:
     if day_info is None:
         day_info = {i:(DAY_EMOJI[i] if i<3 else "📅", DAY_LABELS[i] if i<3 else f"Day {i}") for i in range(3)}
     if avoid_pairs is None: avoid_pairs = []
+    if buddy_char is None:  buddy_char  = {}
 
     seen: dict = {}
     for day_idx in sorted(players_by_day):
@@ -449,9 +473,25 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
                 p.avail_days = [forced_day]
 
     for bset in buddy_groups:
-        # Match by name — a player with alts will have multiple entries,
-        # but buddy preference applies to all their chars
-        bps = [p for p in all_players if p.name_lower in bset]
+        # For each name in the buddy set, pick the right Player entry:
+        # - If buddy_char specifies a class for this player → use only that char
+        # - Otherwise → use any char (first found, as before)
+        # Other chars of the same player are left untouched and raid independently.
+        bps = []
+        for name in bset:
+            candidates = [p for p in all_players if p.name_lower == name]
+            if not candidates:
+                continue
+            required_cls = buddy_char.get(name)
+            if required_cls:
+                # Use the char with matching class for buddy constraint
+                match = next((p for p in candidates if p.class_name.lower() == required_cls), None)
+                if match:
+                    bps.append(match)
+                # Other chars of this player are NOT added to bps → no constraint on them
+            else:
+                # No char preference → add all chars (original behaviour)
+                bps.extend(candidates)
         if len(bps) < 2: continue
         common = set(bps[0].avail_days)
         for bp in bps[1:]: common &= set(bp.avail_days)
@@ -731,9 +771,13 @@ with st.sidebar:
         &nbsp;(Day = Sunday / Monday / Tuesday)<br>
         <b>Buddies</b>: comma-separated names per line — kept together if possible
         </div>""", unsafe_allow_html=True)
-        override_raw = st.text_area("🎭 Role Overrides", value=DEFAULT_OVERRIDES, height=65, key="override_input")
-        fixed_raw    = st.text_area("📌 Fixed Days",     value=DEFAULT_FIXED,     height=65, key="fixed_input")
-        buddy_raw    = st.text_area("👥 Buddy Groups",   value=DEFAULT_BUDDIES,   height=110, key="buddy_input")
+        override_raw    = st.text_area("🎭 Role Overrides", value=DEFAULT_OVERRIDES,    height=65,  key="override_input")
+        fixed_raw       = st.text_area("📌 Fixed Days",     value=DEFAULT_FIXED,        height=65,  key="fixed_input")
+        buddy_raw       = st.text_area("👥 Buddy Groups",   value=DEFAULT_BUDDIES,      height=110, key="buddy_input")
+        st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.75rem;color:#5a4a28;margin-top:.4rem'>
+        <b>Buddy Char</b>: <code style='color:#9a7a40'>Name=Class</code> — for buddy logic, use only this char.<br>
+        <em>Other chars still raid freely, just without the buddy constraint.</em></div>""", unsafe_allow_html=True)
+        buddy_char_raw = st.text_area("🧬 Buddy Char",      value=DEFAULT_BUDDY_CHAR,   height=65,  key="buddy_char_input")
 
     with st.expander("🚫 Avoid Pairings", expanded=False):
         st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.78rem;color:#5a4a28;margin-bottom:.4rem'>
@@ -752,6 +796,7 @@ role_overrides    = parse_role_overrides(override_raw)
 fixed_assignments = parse_fixed(fixed_raw)
 buddy_groups      = parse_buddies(buddy_raw)
 avoid_pairs       = parse_avoid_pairings(avoid_raw)
+buddy_char        = parse_buddy_char(buddy_char_raw)
 
 # ── STEP 1
 st.markdown('<div class="sh">📅 Step 1 — Select Your Karazhan Events</div>', unsafe_allow_html=True)
@@ -838,6 +883,7 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
         "_players_by_day": players_by_day,
         "_dyn_fixed":      dyn_fixed,
         "_buddy_groups":   buddy_groups,
+        "_buddy_char":     buddy_char,
         "_avoid_pairs":    avoid_pairs,
         "_fixed_raw":      fixed_raw,
     })
@@ -868,6 +914,7 @@ if "results" in st.session_state and st.session_state.get("enable_parse_group"):
                     st.session_state["_avoid_pairs"],
                     _pg_sel,
                     _pg_boost,
+                    st.session_state.get("_buddy_char",{}),
                 )
                 st.session_state["results"] = _new
                 st.rerun()
