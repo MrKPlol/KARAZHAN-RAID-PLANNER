@@ -74,6 +74,31 @@ def _get_version() -> str:
 
 APP_VERSION = _get_version()
 
+# All TBC Classic specs — used for the Spec dropdown in the editor
+# Grouped by class, alphabetically sorted within each class
+TBC_SPECS = sorted([
+    # Druid
+    "Balance", "Feral", "Guardian", "Restoration",
+    # Hunter
+    "Beast Mastery", "Marksmanship", "Survival",
+    # Mage
+    "Arcane", "Fire", "Frost",
+    # Paladin
+    "Holy", "Protection", "Retribution",
+    # Priest
+    "Discipline", "Holy", "Shadow",
+    # Rogue
+    "Assassination", "Combat", "Subtlety",
+    # Shaman
+    "Elemental", "Enhancement", "Restoration",
+    # Warlock
+    "Affliction", "Demonology", "Destruction",
+    # Warrior
+    "Arms", "Fury", "Protection",
+])
+# Deduplicate while preserving sort
+TBC_SPECS = sorted(set(TBC_SPECS))
+
 DEFAULT_BUDDIES  = "Ketaminkåre,Tuva\nMiroga,Terry,Vowly\nXylvia,Rock\nMb,Langballje\nStone,Pumpyy"
 DEFAULT_FIXED    = "Stone=Monday\nPumpyy=Monday"
 DEFAULT_OVERRIDES= "Stone=Tank"
@@ -1078,7 +1103,7 @@ edited_df = st.data_editor(flat_df, use_container_width=True, hide_index=True, n
     column_config={
         "Name":     st.column_config.TextColumn("Name",      disabled=True, width="medium"),
         "Class":    st.column_config.TextColumn("Class",     disabled=True, width="small"),
-        "Spec":     st.column_config.TextColumn("Spec",      disabled=True, width="medium"),
+        "Spec":     st.column_config.SelectboxColumn("Spec", options=TBC_SPECS, width="medium"),
         "Role":     st.column_config.SelectboxColumn("Role", options=["Tank","Healer","DPS"], width="small"),
         "Group":    st.column_config.SelectboxColumn("Group", options=group_options, width="large"),
         "SG":       st.column_config.SelectboxColumn("SG",   options=[1,2], width="small",
