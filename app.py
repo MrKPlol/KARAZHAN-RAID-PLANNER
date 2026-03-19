@@ -534,9 +534,11 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         raids_per_day[d] = 2 if excl>=18 else (1 if raw_count.get(d,0)>=10 else 0)
 
     total  = sum(raids_per_day.values())
+    # target = one raid per selected event — never open a 2nd slot on one day
+    # just to hit a fixed number. A/B split only happens with ≥18 exclusive sign-ups.
+    target_raids = len(all_day_idxs)
     active = sorted([d for d in all_day_idxs if raw_count.get(d,0)>=10],
                     key=lambda d: -raw_count.get(d,0))
-    target_raids = max(3, len(all_day_idxs))
     while total < target_raids and active:
         bumped = False
         for d in active:
