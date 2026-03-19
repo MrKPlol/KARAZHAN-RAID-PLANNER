@@ -1073,7 +1073,18 @@ for ci,label in enumerate(raid_keys):
         </div>""", unsafe_allow_html=True)
 
 if not all_valid:
-    st.markdown('<div class="wb">⚠️ One or more groups violate <b>1 Tank · 2 Healers · 7 DPS</b>.</div>', unsafe_allow_html=True)
+    _issues = []
+    for _lbl in raid_keys:
+        _g = edited_groups.get(_lbl, [])
+        _t = sum(1 for p in _g if p.get("Role")=="Tank")
+        _h = sum(1 for p in _g if p.get("Role")=="Healer")
+        _d = sum(1 for p in _g if p.get("Role")=="DPS")
+        _parts = []
+        if _t != 1: _parts.append(f"{_t}/1T")
+        if _h != 2: _parts.append(f"{_h}/2H")
+        if _d != 7: _parts.append(f"{_d}/7D")
+        if _parts: _issues.append(f"<b>{_lbl}</b>: {', '.join(_parts)}")
+    st.markdown(f'<div class="wb">⚠️ Composition issues — {" · ".join(_issues)}</div>', unsafe_allow_html=True)
 else:
     st.markdown('<div class="sb">✅ All groups valid <b>1-2-7</b>!</div>', unsafe_allow_html=True)
 
