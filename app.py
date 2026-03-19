@@ -428,7 +428,10 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
     seen: dict = {}
     for day_idx in sorted(players_by_day):
         for p in players_by_day[day_idx]:
-            key = p.name_lower
+            # Key = (userId, class) — same person with different class on different
+            # days is treated as a separate entry (they're bringing an alt).
+            # Same person + same class on multiple days → merge into avail_days.
+            key = (p.user_id.lower(), p.class_name.lower())
             if key not in seen:
                 p.assigned=False; p.group_key=""; p.subgroup=1; seen[key]=p
             elif day_idx not in seen[key].avail_days:
@@ -437,10 +440,15 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
     all_players = list(seen.values())
     for p in all_players: p.assigned=False; p.group_key=""; p.subgroup=1
 
+    # Fixed assignments still match by name (case-insensitive)
     for name_lower,forced_day in fixed_assignments.items():
-        if name_lower in seen: seen[name_lower].avail_days=[forced_day]
+        for p in all_players:
+            if p.name_lower == name_lower:
+                p.avail_days = [forced_day]
 
     for bset in buddy_groups:
+        # Match by name — a player with alts will have multiple entries,
+        # but buddy preference applies to all their chars
         bps = [p for p in all_players if p.name_lower in bset]
         if len(bps) < 2: continue
         common = set(bps[0].avail_days)
