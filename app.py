@@ -62,7 +62,34 @@ TARGET         = {"Tank":1,"Healer":2,"DPS":7}
 RAID_SIZE      = 10
 KARA_KEYWORDS  = ["kara","karazhan","karaz"]
 
-APP_VERSION = "v1.6.0"  # Major.Minor.Patch — bump manually on each release
+def _get_version() -> str:
+    """Auto-version from git: tag if available, else short commit hash + date."""
+    import subprocess, os
+    try:
+        tag = subprocess.check_output(
+            ["git", "describe", "--tags", "--abbrev=0"],
+            stderr=subprocess.DEVNULL, cwd=os.path.dirname(os.path.abspath(__file__))
+        ).decode().strip()
+        # Also get commits since last tag
+        commits = subprocess.check_output(
+            ["git", "rev-list", f"{tag}..HEAD", "--count"],
+            stderr=subprocess.DEVNULL, cwd=os.path.dirname(os.path.abspath(__file__))
+        ).decode().strip()
+        if commits and commits != "0":
+            return f"{tag}+{commits}"
+        return tag
+    except Exception:
+        pass
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL, cwd=os.path.dirname(os.path.abspath(__file__))
+        ).decode().strip()
+        return f"dev-{sha}" if sha else "dev"
+    except Exception:
+        return "dev"
+
+APP_VERSION = _get_version()
 
 DEFAULT_BUDDIES  = "Ketaminkåre,Tuva\nMiroga,Terry,Vowly\nXylvia,Rock\nMb,Langballje\nStone,Pumpyy"
 DEFAULT_FIXED    = "Stone=Monday\nPumpyy=Monday"
@@ -1041,11 +1068,11 @@ all_scores = [group_score(results.get(k,[])) for k in raid_keys if results.get(k
 if len(all_scores) >= 2:
     diff = max(all_scores) - min(all_scores)
     if diff < 200:
-        st.markdown(f'<div class="sb">⚖️ Gut ausgewogen — Score-Unterschied: {diff} Punkte</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sb">⚖️ Well balanced — score spread: {diff} pts</div>', unsafe_allow_html=True)
     elif diff < 400:
-        st.markdown(f'<div class="ib">⚖️ Akzeptable Balance — Score-Unterschied: {diff} Punkte</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="ib">⚖️ Reasonably balanced — score spread: {diff} pts</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="wb">⚖️ Ungleichgewicht ({diff} Punkte) — manuelle Anpassung empfohlen</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="wb">⚖️ Score imbalance detected ({diff} pts) — consider manual adjustments</div>', unsafe_allow_html=True)
 
 
 # ── STEP 4 Discord Export
