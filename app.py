@@ -85,9 +85,9 @@ def _get_version() -> str:
             ["git", "rev-parse", "--short", "HEAD"],
             stderr=subprocess.DEVNULL, cwd=os.path.dirname(os.path.abspath(__file__))
         ).decode().strip()
-        return f"dev-{sha}" if sha else "dev"
+        return f"v1.7.0-{sha}" if sha else "v1.7.0"
     except Exception:
-        return "dev"
+        return "v1.7.0"
 
 APP_VERSION = _get_version()
 
@@ -1028,11 +1028,12 @@ for ci,label in enumerate(raid_keys):
     sl,sc_col = score_label(sc)
     o_cls    = [p.class_name.lower() for p in orig]
     o_specs  = [(p.class_name.lower(), p.spec.lower()) for p in orig]
-    has_bl   = "shaman"  in o_cls
-    has_wl   = "warlock" in o_cls
-    has_pal  = "paladin" in o_cls
-    has_spr  = any(c=="priest" and "shadow" in s for c,s in o_specs)
-    has_reb  = "druid" in o_cls
+    has_shaman  = "shaman"  in o_cls
+    has_pal     = "paladin" in o_cls
+    has_druid   = "druid"   in o_cls
+    has_mage    = "mage"    in o_cls
+    has_wl      = "warlock" in o_cls
+    has_spr     = any(c=="priest" and "shadow" in s for c,s in o_specs)
     is_parse = label == _parse_label
 
     def _c(val,need,icon):
@@ -1042,12 +1043,25 @@ for ci,label in enumerate(raid_keys):
     with val_cols[ci % len(val_cols)]:
         bc       = "#30a040" if valid else "#c04020"
         pg_badge = '<span style="font-size:.65rem;color:#c9a84c;font-family:Cinzel,serif">🏆 Parse Group &nbsp;</span>' if is_parse else ""
-        warn = ""
-        if not has_bl:  warn += '<span class="chip" style="color:#e06040;border-color:#e0604030;background:#e0604018">❌ No BL!</span> '
-        if not has_wl:  warn += '<span class="chip" style="color:#c08030;border-color:#c0803030;background:#c0803018">⚠️ No Warlock</span> '
-        if not has_pal: warn += '<span class="chip" style="color:#806020;border-color:#80602030;background:#80602018">⚠️ No Paladin</span> '
-        if has_spr:     warn += '<span class="chip" style="color:#50c050;border-color:#50c05030;background:#50c05018">✓ SPriest</span> '
-        if has_reb:     warn += '<span class="chip" style="color:#50c050;border-color:#50c05030;background:#50c05018">✓ Rebirth</span> '
+        def _cls_chip(present, label, critical=False):
+            if present:
+                c = "#50c050"
+                return f'<span class="chip" style="color:{c};border-color:{c}30;background:{c}18">✓ {label}</span> '
+            elif critical:
+                c = "#e06040"
+                return f'<span class="chip" style="color:{c};border-color:{c}30;background:{c}18">✗ {label}</span> '
+            else:
+                c = "#5a4a28"
+                return f'<span class="chip" style="color:{c};border-color:{c}30;background:{c}18">✗ {label}</span> '
+
+        # Row 2: class buffs + SPriest bonus
+        warn  = _cls_chip(has_shaman, "Shaman", critical=True)
+        warn += _cls_chip(has_pal,    "Paladin")
+        warn += _cls_chip(has_druid,  "Druid")
+        warn += _cls_chip(has_mage,   "Mage")
+        warn += _cls_chip(has_wl,     "Warlock")
+        warn += '<span style="color:#3a2e18;padding:0 .3rem">|</span>'
+        warn += _cls_chip(has_spr,    "SPriest")
         st.markdown(f"""
         <div style="background:#0d0d18;border:1px solid {bc};border-radius:6px;padding:.65rem .8rem;margin-bottom:.5rem">
           <div style="font-family:'Cinzel',serif;font-size:.88rem;color:#f0c060;margin-bottom:.35rem">{pg_badge}{'✅' if valid else '⚠️'} {label}</div>
