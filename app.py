@@ -258,10 +258,17 @@ def assign_subgroups(players: list) -> list:
         p.subgroup = sg
         (sg1 if sg == 1 else sg2).append(p)
 
-    # 1. Tank → always SG1
+    # 1. Tank placement:
+    # Prot Paladin → SG1 (Casters) — benefits from Int/Wrath of Air, provides Wisdom/Salv
+    # All other tanks (Druid, Warrior) → SG2 (Melee) — physical fighters, no caster synergy
     for p in players:
         if p.role == "Tank":
-            add(p, 1)
+            cls  = p.class_name.lower()
+            spec = p.spec.lower()
+            if cls == "paladin" and ("protection" in spec or "prot" in spec):
+                add(p, 1)
+            else:
+                add(p, 2)
 
     # 2. Healers → SG1 first, overflow to SG2
     for p in players:
