@@ -13,7 +13,7 @@ import requests
 import streamlit as st
 
 # ─── INTERNAL VERSION MARKER — do not remove ───────────────────
-# APP_FILE_VERSION = "v1.8.5"
+# APP_FILE_VERSION = "v1.8.6"
 # ───────────────────────────────────────────────────────────────
 
 API_BASE   = "https://raid-helper.dev/api"
@@ -760,43 +760,6 @@ def discord_block(label: str, players: list) -> str:
         lines.append("")
     return "\n".join(lines).strip()
 
-# ── MOCK DATA
-def _mk(title,rows):
-    return {"id":title.replace(" ","_"),"title":title,"startTime":int(time.time())+3600,
-            "signUps":[{"userId":n,"name":n,"className":c,"specName":s,"entryType":r,"status":"primary"}
-                       for n,c,s,r in rows]}
-
-DEMO_EVENTS = [
-    _mk("Kara ☀️ Sunday",[
-        ("Tankbringer","Warrior","Protection","Tank"),("Shieldwall","Paladin","Protection","Tank"),
-        ("ChainHealer","Shaman","Restoration","Heal"),("HolyLight","Paladin","Holy","Heal"),
-        ("DiscoPriest","Priest","Discipline","Heal"),("ShadowBolt","Warlock","Destruction","DPS"),
-        ("ArrowStorm","Hunter","Beast Mastery","DPS"),("IceBlast","Mage","Frost","DPS"),
-        ("StabStab","Rogue","Combat","DPS"),("Xylvia","Mage","Arcane","DPS"),
-        ("Rockedw","Hunter","Beast Mastery","DPS"),("VoidPact","Warlock","Affliction","DPS"),
-    ]),
-    _mk("Kara 🌙 Monday",[
-        ("IronClad","Warrior","Protection","Tank"),("HolyAvenger","Paladin","Protection","Tank"),
-        ("WaveRider","Shaman","Restoration","Heal"),("HealBot","Priest","Holy","Heal"),
-        ("TreeHugger","Druid","Restoration","Heal"),("Stone","Druid","Guardian","DPS"),
-        ("Pumpyy","Warrior","Fury","DPS"),("Miroga","Mage","Frost","DPS"),
-        ("Terry","Hunter","Survival","DPS"),("Vowly","Druid","Restoration","Heal"),
-        ("Mb","Rogue","Combat","DPS"),("Langballje","Hunter","Marksmanship","DPS"),
-        ("ArcaneSpam","Mage","Arcane","DPS"),("RageFury","Warrior","Fury","DPS"),
-        ("Shadowfire","Priest","Shadow","DPS"),("Earthshaker","Shaman","Enhancement","DPS"),
-        ("Soulreaper","Warlock","Affliction","DPS"),("Ketaminkåre","Rogue","Subtlety","DPS"),
-        ("Tuva","Druid","Balance","DPS"),("Vapecum","Hunter","Beast Mastery","DPS"),
-        ("Frostweave","Mage","Frost","DPS"),
-    ]),
-    _mk("Kara ⚔️ Tuesday",[
-        ("DivinePlate","Paladin","Protection","Tank"),("Totemzilla","Shaman","Restoration","Heal"),
-        ("GracefulHeal","Priest","Holy","Heal"),("SacredLight","Paladin","Holy","Heal"),
-        ("VoidMaster","Warlock","Destruction","DPS"),("SurvivalMode","Hunter","Survival","DPS"),
-        ("FrostNova","Mage","Frost","DPS"),("BerserkX","Warrior","Fury","DPS"),
-        ("ShadowDancer","Rogue","Subtlety","DPS"),("Ironbreaker","Warrior","Fury","DPS"),
-    ]),
-]
-
 # ══════════════════════════════════════════════════════════════════
 #  PAGE CONFIG + CSS
 # ══════════════════════════════════════════════════════════════════
@@ -816,7 +779,7 @@ html,body,[data-testid="stAppViewContainer"]{background:#07070f !important;color
 .kh-sub{font-family:'Crimson Pro',serif;font-size:.95rem;color:#8a6a38;letter-spacing:.18em;text-transform:uppercase;margin-top:.3rem;}
 .gold-div{height:1px;max-width:480px;margin:.6rem auto;background:linear-gradient(90deg,transparent,#c9a84c 30%,#f0c060 50%,#c9a84c 70%,transparent);}
 .sh{font-family:'Cinzel',serif;font-size:1rem;font-weight:600;color:#c9a84c;margin:.6rem 0 .3rem;display:flex;align-items:center;gap:.35rem;}
-.ib{background:rgba(201,168,76,.07);border-left:3px solid #c9a84c;border-radius:0 6px 6px 0;padding:.55rem .85rem;font-family:'Crimson Pro',serif;font-size:.9rem;color:#9a7840;margin-bottom:.8rem;}
+.ib{background:rgba(201,168,76,.07);border-left:3px solid #c9a84c;border-radius:0 6px 6px 0;padding:.55rem .85rem;font-family:'Crimson Pro',serif;font-size:.9rem;color:#c9a055;margin-bottom:.8rem;}
 .wb{background:rgba(200,60,30,.07);border-left:3px solid #c04020;border-radius:0 6px 6px 0;padding:.55rem .85rem;font-family:'Crimson Pro',serif;font-size:.9rem;color:#b05030;margin-bottom:.8rem;}
 .sb{background:rgba(40,180,60,.07);border-left:3px solid #30a040;border-radius:0 6px 6px 0;padding:.55rem .85rem;font-family:'Crimson Pro',serif;font-size:.9rem;color:#50a060;margin-bottom:.8rem;}
 .chip{font-family:'Cinzel',serif;font-size:.67rem;padding:.1rem .48rem;border-radius:20px;border:1px solid;font-weight:600;}
@@ -850,14 +813,13 @@ except Exception:
 
 # ── SIDEBAR
 with st.sidebar:
-    creds_missing = not (server_id and api_key)
-
-    # ── General (always visible)
+    # ── General
     st.markdown('<div class="sh">⚙️ Settings</div>', unsafe_allow_html=True)
-    demo_mode   = st.checkbox("🧪 Demo Mode", value=creds_missing, disabled=creds_missing,
-                               help="Uses sample data." if not creds_missing else "No credentials — Demo forced.")
-    strict_mode = st.checkbox("Strict status filter", value=True,
-                               help="Only primary/confirmed/spec.")
+    strict_mode = st.checkbox(
+        "Confirmed sign-ups only", value=True,
+        help="When ON: only players with status primary/confirmed/spec are included.\n"
+             "When OFF: also includes late, tentative and standby sign-ups."
+    )
 
     # ── Parse Group
     st.markdown("---")
@@ -880,33 +842,28 @@ with st.sidebar:
 
     # ── Role Overrides + Fixed + Buddies + Avoid (collapsed by default)
     st.markdown("---")
-    with st.expander("🎭 Role Overrides / Fixed / Buddies", expanded=False):
-        st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.78rem;color:#5a4a28;margin-bottom:.6rem'>
-        <b>Role Override</b>: <code style='color:#9a7a40'>Name=Role</code>
-        &nbsp;(Role = Tank / Healer / DPS)<br>
-        <b>Fixed Day</b>: <code style='color:#9a7a40'>Name=Day</code>
-        &nbsp;(Day = Sunday / Monday / Tuesday)<br>
-        <b>Buddies</b>: comma-separated names per line — kept together if possible
-        </div>""", unsafe_allow_html=True)
-        override_raw    = st.text_area("🎭 Role Overrides", value=DEFAULT_OVERRIDES,    height=65,  key="override_input")
-        fixed_raw       = st.text_area("📌 Fixed Days",     value=DEFAULT_FIXED,        height=65,  key="fixed_input")
-        buddy_raw       = st.text_area("👥 Buddy Groups",   value=DEFAULT_BUDDIES,      height=110, key="buddy_input")
-        st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.75rem;color:#5a4a28;margin-top:.4rem'>
-        <b>Buddy Char</b>: <code style='color:#9a7a40'>Name=Class</code> — for buddy logic, use only this char.<br>
-        <em>Other chars still raid freely, just without the buddy constraint.</em></div>""", unsafe_allow_html=True)
-        buddy_char_raw = st.text_area("🧬 Buddy Char",      value=DEFAULT_BUDDY_CHAR,   height=65,  key="buddy_char_input")
+    with st.expander("⚙️ Composition Rules", expanded=False):
+        st.text_area("🎭 Role Overrides", value=DEFAULT_OVERRIDES, height=65,
+                     key="override_input",
+                     help="Format: Name=Role\nForce a player into a specific role regardless of their Raid-Helper sign-up.\nRoles: Tank / Healer / DPS\nExample: Stone=Tank")
+        st.text_area("📌 Fixed Days", value=DEFAULT_FIXED, height=65,
+                     key="fixed_input",
+                     help="Format: Name=Day\nLock a player to a specific raid day.\nDays: Sunday / Monday / Tuesday / Friday etc.\nExample: Stone=Monday")
+        st.text_area("👥 Buddy Groups", value=DEFAULT_BUDDIES, height=110,
+                     key="buddy_input",
+                     help="One group per line, names comma-separated.\nBuddies are kept in the same raid if possible (soft preference — not guaranteed).\nExample: Miroga,Terry,Vowly")
+        st.text_area("🧬 Buddy Char", value=DEFAULT_BUDDY_CHAR, height=65,
+                     key="buddy_char_input",
+                     help="Format: Name=Class\nFor players with multiple alts: only this class counts for buddy logic.\nThe other chars still raid freely.\nExample: Rock=Paladin")
 
     with st.expander("🚫 Avoid Pairings", expanded=False):
-        st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.78rem;color:#5a4a28;margin-bottom:.4rem'>
-        Format: <code style='color:#9a7a40'>PlayerA=!PlayerB</code><br>
-        Never in the same group. Relaxed if unavoidable.</div>""", unsafe_allow_html=True)
-        avoid_raw = st.text_area("Pairs", value=DEFAULT_AVOID, height=80, label_visibility="collapsed", key="avoid_input")
+        avoid_raw = st.text_area("Avoid Pairings", value=DEFAULT_AVOID, height=80,
+                                  label_visibility="collapsed", key="avoid_input",
+                                  help="Format: PlayerA=!PlayerB\nThese two players will never be placed in the same group.\nIf unavoidable, the rule is relaxed automatically.\nExample: Vowly=!Vapecum")
 
     st.markdown("---")
-    st.markdown(f"""<div style='font-family:"Crimson Pro",serif;font-size:.72rem;color:#3a2e18;line-height:1.6'>
-    1T·2H·7D &nbsp;|&nbsp; BL·Warlock·Paladin·SPriest·Druid·Hunter·Mage<br>
-    Equity: all groups get fair buffs &nbsp;|&nbsp; SG1=Casters · SG2=Melee<br>
-    <span style='color:#2a2010'>Karazhan Raid Planner {APP_VERSION}</span>
+    st.markdown(f"""<div style='font-family:"Crimson Pro",serif;font-size:.72rem;color:#3a2e18;text-align:center;margin-top:.5rem'>
+    {APP_VERSION}
     </div>""", unsafe_allow_html=True)
 
 role_overrides    = parse_role_overrides(override_raw)
@@ -918,22 +875,19 @@ buddy_char        = parse_buddy_char(buddy_char_raw)
 # ── STEP 1
 st.markdown('<div class="sh">📅 Step 1 — Select Your Karazhan Events</div>', unsafe_allow_html=True)
 
-if demo_mode:
-    available_events = DEMO_EVENTS
-    st.markdown('<div class="ib">🧪 <b>Demo Mode</b> active — using sample data.</div>', unsafe_allow_html=True)
-else:
-    with st.spinner("Loading events..."):
-        raw_events = fetch_server_events(server_id, api_key)
-    if not raw_events:
-        st.markdown('<div class="wb">❌ No events found. Check your <code>secrets.toml</code>.</div>', unsafe_allow_html=True)
-        st.stop()
-    _,col_t = st.columns([3,1])
-    with col_t:
-        show_all = st.checkbox("Show all events", value=False)
-    available_events = filter_events(raw_events, show_all)
-    if not available_events:
-        st.markdown('<div class="wb">⚠️ No recent events. Enable "Show all events".</div>', unsafe_allow_html=True)
-        st.stop()
+with st.spinner("Loading events..."):
+    raw_events = fetch_server_events(server_id, api_key)
+if not raw_events:
+    st.markdown('<div class="wb">❌ No events found. Check your <code>secrets.toml</code>.</div>', unsafe_allow_html=True)
+    st.stop()
+_,col_t = st.columns([3,1])
+with col_t:
+    show_all = st.checkbox("Show all events", value=False,
+                            help="By default only events from the last 14 days and next 30 days are shown.")
+available_events = filter_events(raw_events, show_all)
+if not available_events:
+    st.markdown('<div class="wb">⚠️ No recent events. Enable "Show all events".</div>', unsafe_allow_html=True)
+    st.stop()
 
 event_options = {_event_label(e):e for e in available_events}
 event_labels  = list(event_options.keys())
@@ -966,18 +920,16 @@ st.markdown('<div class="sh">⚔️ Step 2 — Build Compositions</div>', unsafe
 
 if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
     players_by_day: dict = {}
-    debug_raw: dict      = {}
     day_info    = make_day_info(selected_events)
     dynamic_map = make_dynamic_day_map(day_info)
     dyn_fixed   = parse_fixed(fixed_raw, dynamic_map)
 
     with st.spinner("Fetching sign-up data..."):
         for day_idx,event in enumerate(selected_events):
-            event_data = event if demo_mode else fetch_event_detail(str(event.get("id","")), api_key)
+            event_data = fetch_event_detail(str(event.get("id","")), api_key)
             if event_data:
                 raw_su = event_data.get("signUps") or event_data.get("signups") or event_data.get("players") or []
                 em,wd  = day_info.get(day_idx,("📅",f"Day {day_idx}"))
-                debug_raw[f"{em} {wd} (slot {day_idx})"] = raw_su[:3]
                 plist  = parse_signups(event_data, day_idx, strict_mode, role_overrides)
                 if plist: players_by_day[day_idx] = plist
 
@@ -993,8 +945,6 @@ if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
         "results":         results,
         "selected_events": selected_events,
         "api_key_used":    api_key,
-        "demo_mode":       demo_mode,
-        "debug_raw":       debug_raw,
         "day_info":        day_info,
         # Rebuild ingredients (no re-fetch needed)
         "_players_by_day": players_by_day,
@@ -1048,7 +998,6 @@ if "results" not in st.session_state:
 results      = st.session_state["results"]
 sel_events   = st.session_state["selected_events"]
 api_key_sess = st.session_state.get("api_key_used", api_key)
-is_demo      = st.session_state.get("demo_mode", demo_mode)
 di           = st.session_state.get("day_info", {})
 
 raid_keys = [k for k in results if "Bench" not in k]
@@ -1059,10 +1008,6 @@ n_bench   = len(results.get(bench_key,[]))
 st.markdown(f"""<div class="ib">⚔️ <b>{len(raid_keys)} Raids</b> built &nbsp;·&nbsp;
 👥 <b>{n_placed}</b> assigned &nbsp;·&nbsp; 🪑 <b>{n_bench}</b> on bench</div>""", unsafe_allow_html=True)
 
-if st.session_state.get("debug_raw"):
-    with st.expander("🔍 Debug — Raw API fields", expanded=False):
-        for dn,entries in st.session_state["debug_raw"].items():
-            st.markdown(f"**{dn}**"); st.json(entries)
 
 st.markdown('<div class="sh">🃏 Step 3 — Review & Edit Compositions</div>', unsafe_allow_html=True)
 st.markdown('<div class="ib">💡 Change <b>Group</b> to move a player. Change <b>Role</b> or <b>SG</b> (subgroup) to adjust. '
@@ -1178,6 +1123,19 @@ if not all_valid:
 else:
     st.markdown('<div class="sb">✅ All groups valid <b>1-2-7</b>!</div>', unsafe_allow_html=True)
 
+# Buddy unmatched warning
+if buddy_groups:
+    all_assigned = {p.name_lower: p.group_key for label in raid_keys for p in results.get(label,[])}
+    unmatched_buddies = []
+    for bset in buddy_groups:
+        assigned_groups = {all_assigned.get(n) for n in bset if n in all_assigned}
+        assigned_groups.discard(None)
+        if len(assigned_groups) > 1:
+            unmatched_buddies.append(", ".join(sorted(bset)).title())
+    if unmatched_buddies:
+        pairs_str = " · ".join(f"<b>{b}</b>" for b in unmatched_buddies)
+        st.markdown(f'<div class="ib">👥 Buddy groups split across raids: {pairs_str}</div>', unsafe_allow_html=True)
+
 # Balance indicator
 all_scores = [group_score(results.get(k,[])) for k in raid_keys if results.get(k)]
 if len(all_scores) >= 2:
@@ -1190,8 +1148,14 @@ if len(all_scores) >= 2:
         st.markdown(f'<div class="wb">⚖️ Score imbalance detected ({diff} pts) — consider manual adjustments</div>', unsafe_allow_html=True)
 
 
-# ── STEP 4 Discord Export
-st.markdown('<div class="sh" style="margin-top:1rem">📢 Step 4 — Discord Export</div>', unsafe_allow_html=True)
+# ── STEP 4 — Raid Overview + Discord Export
+st.markdown('<div class="sh" style="margin-top:1rem">📋 Step 4 — Raid Overview</div>', unsafe_allow_html=True)
+
+def _class_color(cls: str) -> str:
+    return CLASS_COLOR.get(cls.lower(), "#888888")
+
+def _role_icon(role: str) -> str:
+    return {"Tank":"🛡️","Healer":"💚","DPS":"⚔️"}.get(role,"⚔️")
 
 keys_to_export = raid_keys+([bench_key] if edited_groups.get(bench_key) else [])
 if keys_to_export:
@@ -1200,8 +1164,20 @@ if keys_to_export:
         with tab:
             if label == bench_key:
                 export_players = results.get(label, [])
+                # Simple bench list
+                if export_players:
+                    bench_html = '<div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem">' 
+                    for p in export_players:
+                        col = _class_color(p.class_name)
+                        bench_html += (f'<div style="background:#0d0d18;border:1px solid {col}40;' +
+                                       f'border-radius:5px;padding:.3rem .6rem;font-family:Cinzel,serif;' +
+                                       f'font-size:.72rem;color:{col}">' +
+                                       f'{_role_icon(p.role)} {p.name}</div>')
+                    bench_html += '</div>'
+                    st.markdown(bench_html, unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="sb">✅ No players on bench!</div>', unsafe_allow_html=True)
             else:
-                # Use edited_groups so manual role/group changes are reflected
                 class _EP:
                     def __init__(self, d):
                         self.name       = d.get("Name", "?")
@@ -1210,20 +1186,50 @@ if keys_to_export:
                         self.role       = d.get("Role", "DPS")
                         self.subgroup   = int(d.get("SG", 1))
                 export_players = [_EP(r) for r in edited_groups.get(label, [])]
-            st.code(discord_block(label, export_players), language=None)
-            st.caption("📋 Click the copy icon (top-right) to copy.")
+
+                # ── Visual group cards (SG1 | SG2)
+                sg1 = [p for p in export_players if p.subgroup == 1]
+                sg2 = [p for p in export_players if p.subgroup == 2]
+
+                # Determine labels based on tank type
+                tank_p = next((p for p in export_players if p.role=="Tank"), None)
+                is_pala_tank = tank_p and tank_p.class_name.lower()=="paladin"
+                sg1_title = "🔷 Group 1 — Casters" if is_pala_tank else "🔷 Group 1 — Melee"
+                sg2_title = "🔶 Group 2 — Melee"   if is_pala_tank else "🔶 Group 2 — Casters"
+
+                col1, col2 = st.columns(2)
+                for col, sg, sg_title in [(col1, sg1, sg1_title), (col2, sg2, sg2_title)]:
+                    with col:
+                        st.markdown(f'<div style="font-family:Cinzel,serif;font-size:.82rem;color:#c9a84c;margin-bottom:.4rem">{sg_title}</div>', unsafe_allow_html=True)
+                        for role in ["Tank","Healer","DPS"]:
+                            for p in [x for x in sg if x.role==role]:
+                                col_c = _class_color(p.class_name)
+                                spec  = p.spec if p.spec and p.spec != "—" else p.class_name.title()
+                                st.markdown(
+                                    f'<div style="display:flex;align-items:center;gap:.4rem;' +
+                                    f'background:#0d0d18;border-left:3px solid {col_c};' +
+                                    f'border-radius:0 4px 4px 0;padding:.3rem .5rem;' +
+                                    f'margin-bottom:.25rem">' +
+                                    f'<span style="font-size:.85rem">{_role_icon(role)}</span>' +
+                                    f'<span style="font-family:Cinzel,serif;font-size:.78rem;color:{col_c};font-weight:600">{p.name}</span>' +
+                                    f'<span style="font-family:Crimson Pro,serif;font-size:.72rem;color:#5a4a28;margin-left:auto">{spec}</span>' +
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
+
+                # ── Discord Export (secondary — collapsible)
+                with st.expander("📋 Discord Export", expanded=False):
+                    st.code(discord_block(label, export_players), language=None)
+                    st.caption("Click the copy icon (top-right) to copy.")
 
 # ── STEP 5 Push
 st.markdown('<div class="sh" style="margin-top:1rem">🔄 Step 5 — Sync to Raid-Helper</div>', unsafe_allow_html=True)
 
-if is_demo:
-    st.markdown('<div class="ib">ℹ️ Push disabled in Demo Mode.</div>', unsafe_allow_html=True)
-else:
-    st.markdown('<div class="ib">Pushes compositions <b>incl. subgroup assignments</b> to Raid-Helper. Cannot be undone.</div>', unsafe_allow_html=True)
-    if st.button("🚀  Push Compositions to Raid-Helper", type="primary", use_container_width=True):
+st.markdown('<div class="ib">Pushes compositions <b>incl. subgroup assignments</b> to Raid-Helper. Cannot be undone.</div>', unsafe_allow_html=True)
+if st.button("🚀  Push Compositions to Raid-Helper", type="primary", use_container_width=True):
         st.session_state["push_confirm"] = True
 
-    if st.session_state.get("push_confirm"):
+if st.session_state.get("push_confirm"):
         st.warning("⚠️ **Are you sure?** This overwrites all event compositions in Raid-Helper.")
         c1,c2 = st.columns(2)
         with c1:
