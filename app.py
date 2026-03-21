@@ -914,9 +914,13 @@ with st.sidebar:
                      help="Format: Name=Class\nFor players with multiple alts: only this class counts for buddy logic.\nThe other chars still raid freely.\nExample: Rock=Paladin")
 
     with st.expander("🚫 Avoid Pairings", expanded=False):
-        avoid_raw = st.text_area("Avoid Pairings", value=DEFAULT_AVOID, height=80,
+        avoid_raw = st.text_area("🚫 Avoid Pairings", value=DEFAULT_AVOID, height=80,
                                   label_visibility="collapsed", key="avoid_input",
-                                  help="Format: PlayerA=!PlayerB\nThese two players will never be placed in the same group.\nIf unavoidable, the rule is relaxed automatically.\nExample: Vowly=!Vapecum")
+                                  help="Format: PlayerA=!PlayerB\nThese two players will never be placed in the same group.\nIf unavoidable, the rule is relaxed automatically.\nExample: Vowly=!Vapecum",
+                                  placeholder="Vowly=!Vapecum")
+        st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.75rem;color:#7a6030;margin-top:.2rem'>
+        Format: <code style='color:#c9a84c'>PlayerA=!PlayerB</code> — never in the same group.<br>
+        Relaxed automatically if unavoidable.</div>""", unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown(f"""<div style='font-family:"Crimson Pro",serif;font-size:.72rem;color:#3a2e18;text-align:center;margin-top:.5rem'>
@@ -1179,7 +1183,7 @@ if not all_valid:
         if _h != 2: _parts.append(f"{_h}/2H")
         if _d != 7: _parts.append(f"{_d}/7D")
         if _parts: _issues.append(f"<b>{_lbl}</b>: {', '.join(_parts)}")
-    st.markdown(f'<div class="wb" style="color:#e8785a;font-weight:600">⚠️ Composition issues — {" · ".join(_issues)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="wb">⚠️ Composition issues — {" · ".join(_issues)}</div>', unsafe_allow_html=True)
 else:
     st.markdown('<div class="sb">✅ All groups valid <b>1-2-7</b>!</div>', unsafe_allow_html=True)
 
@@ -1205,11 +1209,11 @@ all_scores = [group_score(results.get(k,[])) for k in raid_keys if results.get(k
 if len(all_scores) >= 2:
     diff = max(all_scores) - min(all_scores)
     if diff < 200:
-        st.markdown(f'<div class="sb" style="color:#60c878">⚖️ Well balanced — score spread: {diff} pts</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sb">⚖️ Well balanced — score spread: {diff} pts</div>', unsafe_allow_html=True)
     elif diff < 400:
         st.markdown(f'<div class="ib" style="color:#d4aa55">⚖️ Reasonably balanced — score spread: {diff} pts</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="wb" style="color:#e8785a">⚖️ Score imbalance detected ({diff} pts) — consider manual adjustments</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="wb">⚖️ Score imbalance detected ({diff} pts) — consider manual adjustments</div>', unsafe_allow_html=True)
 
 
 # ── STEP 4 — Raid Overview + Discord Export
@@ -1270,10 +1274,12 @@ if keys_to_export:
                                 col_c = _class_color(p.class_name)
                                 spec  = p.spec if p.spec and p.spec != "—" else p.class_name.title()
                                 # If role was manually changed, fall back to class icon
-                                # (spec may no longer match the assigned role)
-                                orig_role = next((x.role for x in results.get(label,[])
-                                                  if x.name_lower == p.name.lower().strip()), p.role)
-                                if orig_role != p.role:
+                                # Always use spec icon — if role was manually changed,
+                                # fall back to class icon since spec may no longer match
+                                orig_p = next((x for x in results.get(label,[])
+                                               if x.name_lower == p.name.lower().strip()), None)
+                                role_changed = orig_p and orig_p.role != p.role
+                                if role_changed:
                                     icon_url = CLASS_ICON_URL.get(p.class_name.lower(),
                                                f"{ICON_BASE}/class_warrior.jpg")
                                 else:
