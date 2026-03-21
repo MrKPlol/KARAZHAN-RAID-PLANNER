@@ -915,9 +915,8 @@ with st.sidebar:
 
     with st.expander("🚫 Avoid Pairings", expanded=False):
         avoid_raw = st.text_area("🚫 Avoid Pairings", value=DEFAULT_AVOID, height=80,
-                                  label_visibility="collapsed", key="avoid_input",
-                                  help="Format: PlayerA=!PlayerB\nThese two players will never be placed in the same group.\nIf unavoidable, the rule is relaxed automatically.\nExample: Vowly=!Vapecum",
-                                  placeholder="Vowly=!Vapecum")
+                                  key="avoid_input",
+                                  help="Format: PlayerA=!PlayerB\nThese two players will never be placed in the same group.\nIf unavoidable, the rule is relaxed automatically.\nExample: Vowly=!Vapecum")
 
 
     st.markdown("---")
