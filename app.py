@@ -13,7 +13,7 @@ import requests
 import streamlit as st
 
 # ─── INTERNAL VERSION MARKER — do not remove ───────────────────
-# APP_FILE_VERSION = "v1.8.6"
+# APP_FILE_VERSION = "v1.9.0"
 # ───────────────────────────────────────────────────────────────
 
 API_BASE   = "https://raid-helper.dev/api"
@@ -62,6 +62,65 @@ CLASS_COLOR: dict = {
     "druid":"#FF7D0A","death knight":"#C41E3A","dk":"#C41E3A",
 }
 ROLE_EMOJI_MAP = {"Tank":"🛡️","Healer":"💚","DPS":"⚔️"}
+
+ICON_BASE = "https://raw.githubusercontent.com/MrKPlol/KARAZHAN-RAID-PLANNER/main/icons"
+CLASS_ICON_URL: dict = {
+    "warrior":     f"{ICON_BASE}/class_warrior.jpg",
+    "paladin":     f"{ICON_BASE}/class_paladin.jpg",
+    "hunter":      f"{ICON_BASE}/class_hunter.jpg",
+    "rogue":       f"{ICON_BASE}/class_rogue.jpg",
+    "priest":      f"{ICON_BASE}/class_priest.jpg",
+    "shaman":      f"{ICON_BASE}/class_shaman.jpg",
+    "mage":        f"{ICON_BASE}/class_mage.jpg",
+    "warlock":     f"{ICON_BASE}/class_warlock.jpg",
+    "druid":       f"{ICON_BASE}/class_druid.jpg",
+}
+SPEC_ICON_URL: dict = {
+    # Warrior
+    "arms":           f"{ICON_BASE}/warrior_arms.jpg",
+    "fury":           f"{ICON_BASE}/warrior_fury.jpg",
+    "protection":     f"{ICON_BASE}/warrior_protection.jpg",
+    # Paladin
+    "holy":           f"{ICON_BASE}/paladin_holy.jpg",
+    "protection1":    f"{ICON_BASE}/paladin_protection.jpg",
+    "retribution":    f"{ICON_BASE}/paladin_retribution.jpg",
+    # Hunter
+    "beastmastery":   f"{ICON_BASE}/hunter_beastmastery.jpg",
+    "beast mastery":  f"{ICON_BASE}/hunter_beastmastery.jpg",
+    "marksmanship":   f"{ICON_BASE}/hunter_marksmanship.jpg",
+    "survival":       f"{ICON_BASE}/hunter_survival.jpg",
+    # Rogue
+    "assassination":  f"{ICON_BASE}/rogue_assassination.jpg",
+    "combat":         f"{ICON_BASE}/rogue_combat.jpg",
+    "subtlety":       f"{ICON_BASE}/rogue_subtlety.jpg",
+    # Priest
+    "discipline":     f"{ICON_BASE}/priest_discipline.jpg",
+    "shadow":         f"{ICON_BASE}/priest_shadow.jpg",
+    # Shaman
+    "elemental":      f"{ICON_BASE}/shaman_elemental.jpg",
+    "enhancement":    f"{ICON_BASE}/shaman_enhancement.jpg",
+    "restoration":    f"{ICON_BASE}/shaman_restoration.jpg",
+    "restoration1":   f"{ICON_BASE}/shaman_restoration.jpg",
+    # Mage
+    "arcane":         f"{ICON_BASE}/mage_arcane.jpg",
+    "fire":           f"{ICON_BASE}/mage_fire.jpg",
+    "frost":          f"{ICON_BASE}/mage_frost.jpg",
+    # Warlock
+    "affliction":     f"{ICON_BASE}/warlock_affliction.jpg",
+    "demonology":     f"{ICON_BASE}/warlock_demonology.jpg",
+    "destruction":    f"{ICON_BASE}/warlock_destruction.jpg",
+    # Druid
+    "balance":        f"{ICON_BASE}/druid_balance.jpg",
+    "feral":          f"{ICON_BASE}/druid_feral.jpg",
+    "guardian":       f"{ICON_BASE}/druid_guardian.jpg",
+}
+
+def spec_icon_url(cls: str, spec: str) -> str:
+    """Returns the best icon URL for a given class+spec combination."""
+    spec_key = spec.lower().strip()
+    if spec_key in SPEC_ICON_URL:
+        return SPEC_ICON_URL[spec_key]
+    return CLASS_ICON_URL.get(cls.lower().strip(), f"{ICON_BASE}/class_warrior.jpg")
 TARGET         = {"Tank":1,"Healer":2,"DPS":7}
 RAID_SIZE      = 10
 KARA_KEYWORDS  = ["kara","karazhan","karaz"]
@@ -779,7 +838,7 @@ html,body,[data-testid="stAppViewContainer"]{background:#07070f !important;color
 .kh-sub{font-family:'Crimson Pro',serif;font-size:.95rem;color:#8a6a38;letter-spacing:.18em;text-transform:uppercase;margin-top:.3rem;}
 .gold-div{height:1px;max-width:480px;margin:.6rem auto;background:linear-gradient(90deg,transparent,#c9a84c 30%,#f0c060 50%,#c9a84c 70%,transparent);}
 .sh{font-family:'Cinzel',serif;font-size:1rem;font-weight:600;color:#c9a84c;margin:.6rem 0 .3rem;display:flex;align-items:center;gap:.35rem;}
-.ib{background:rgba(201,168,76,.07);border-left:3px solid #c9a84c;border-radius:0 6px 6px 0;padding:.55rem .85rem;font-family:'Crimson Pro',serif;font-size:.9rem;color:#c9a055;margin-bottom:.8rem;}
+.ib{background:rgba(201,168,76,.07);border-left:3px solid #c9a84c;border-radius:0 6px 6px 0;padding:.55rem .85rem;font-family:'Crimson Pro',serif;font-size:.9rem;color:#d4aa55;margin-bottom:.8rem;}
 .wb{background:rgba(200,60,30,.07);border-left:3px solid #c04020;border-radius:0 6px 6px 0;padding:.55rem .85rem;font-family:'Crimson Pro',serif;font-size:.9rem;color:#b05030;margin-bottom:.8rem;}
 .sb{background:rgba(40,180,60,.07);border-left:3px solid #30a040;border-radius:0 6px 6px 0;padding:.55rem .85rem;font-family:'Crimson Pro',serif;font-size:.9rem;color:#50a060;margin-bottom:.8rem;}
 .chip{font-family:'Cinzel',serif;font-size:.67rem;padding:.1rem .48rem;border-radius:20px;border:1px solid;font-weight:600;}
@@ -795,13 +854,11 @@ section[data-testid="stSidebar"]{background:#0a0a14 !important;border-right:1px 
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(f"""
+st.markdown("""
 <div class="kh">
   <div class="kh-title">🏰 KARAZHAN RAID PLANNER</div>
   <div class="gold-div"></div>
   <div class="kh-sub">R2 — Make Raids Great Again &nbsp;·&nbsp; TBC Classic Anniversary</div>
-  <div style="font-family:'Crimson Pro',serif;font-size:.7rem;color:#3a2a10;
-              margin-top:.35rem;letter-spacing:.15em">{APP_VERSION}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -914,6 +971,9 @@ if fixed_assignments:
     st.markdown('<div class="ib">📌 Fixed: '+" · ".join(f"<b>{n.title()}</b>→{_dn.get(d,f'Day {d}')}" for n,d in fixed_assignments.items())+"</div>", unsafe_allow_html=True)
 if avoid_pairs:
     st.markdown('<div class="ib">🚫 Avoid Pairings: '+" · ".join(" ≠ ".join(p.title() for p in sorted(pair)) for pair in avoid_pairs)+"</div>", unsafe_allow_html=True)
+if buddy_groups:
+    buddy_str = " · ".join(", ".join(n.title() for n in sorted(g)) for g in buddy_groups)
+    st.markdown(f'<div class="ib">👥 Buddy Groups: {buddy_str}</div>', unsafe_allow_html=True)
 
 # ── STEP 2
 st.markdown('<div class="sh">⚔️ Step 2 — Build Compositions</div>', unsafe_allow_html=True)
@@ -1149,7 +1209,7 @@ if len(all_scores) >= 2:
 
 
 # ── STEP 4 — Raid Overview + Discord Export
-st.markdown('<div class="sh" style="margin-top:1rem">📋 Step 4 — Raid Overview</div>', unsafe_allow_html=True)
+st.markdown('<div class="sh" style="margin-top:1rem">📋 Step 4 — Raid Overview & Discord Export</div>', unsafe_allow_html=True)
 
 def _class_color(cls: str) -> str:
     return CLASS_COLOR.get(cls.lower(), "#888888")
@@ -1205,14 +1265,15 @@ if keys_to_export:
                             for p in [x for x in sg if x.role==role]:
                                 col_c = _class_color(p.class_name)
                                 spec  = p.spec if p.spec and p.spec != "—" else p.class_name.title()
+                                icon_url = spec_icon_url(p.class_name, spec)
                                 st.markdown(
-                                    f'<div style="display:flex;align-items:center;gap:.4rem;' +
+                                    f'<div style="display:flex;align-items:center;gap:.5rem;' +
                                     f'background:#0d0d18;border-left:3px solid {col_c};' +
                                     f'border-radius:0 4px 4px 0;padding:.3rem .5rem;' +
                                     f'margin-bottom:.25rem">' +
-                                    f'<span style="font-size:.85rem">{_role_icon(role)}</span>' +
+                                    f'<img src="{icon_url}" style="width:28px;height:28px;border-radius:3px;flex-shrink:0">' +
                                     f'<span style="font-family:Cinzel,serif;font-size:.78rem;color:{col_c};font-weight:600">{p.name}</span>' +
-                                    f'<span style="font-family:Crimson Pro,serif;font-size:.72rem;color:#5a4a28;margin-left:auto">{spec}</span>' +
+                                    f'<span style="font-size:.7rem">{_role_icon(role)}</span>' +
                                     f'</div>',
                                     unsafe_allow_html=True
                                 )
