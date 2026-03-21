@@ -1179,33 +1179,37 @@ if not all_valid:
         if _h != 2: _parts.append(f"{_h}/2H")
         if _d != 7: _parts.append(f"{_d}/7D")
         if _parts: _issues.append(f"<b>{_lbl}</b>: {', '.join(_parts)}")
-    st.markdown(f'<div class="wb">⚠️ Composition issues — {" · ".join(_issues)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="wb" style="color:#e8785a;font-weight:600">⚠️ Composition issues — {" · ".join(_issues)}</div>', unsafe_allow_html=True)
 else:
     st.markdown('<div class="sb">✅ All groups valid <b>1-2-7</b>!</div>', unsafe_allow_html=True)
 
-# Buddy unmatched warning
+# Buddy unmatched warning — check edited_groups so manual moves are reflected
 if buddy_groups:
-    all_assigned = {p.name_lower: p.group_key for label in raid_keys for p in results.get(label,[])}
+    # Build name→group map from edited_groups (reflects manual changes)
+    all_assigned_edited = {}
+    for lbl in raid_keys:
+        for row in edited_groups.get(lbl, []):
+            all_assigned_edited[row.get("Name","").lower().strip()] = lbl
     unmatched_buddies = []
     for bset in buddy_groups:
-        assigned_groups = {all_assigned.get(n) for n in bset if n in all_assigned}
+        assigned_groups = {all_assigned_edited.get(n) for n in bset if n in all_assigned_edited}
         assigned_groups.discard(None)
         if len(assigned_groups) > 1:
             unmatched_buddies.append(", ".join(sorted(bset)).title())
     if unmatched_buddies:
         pairs_str = " · ".join(f"<b>{b}</b>" for b in unmatched_buddies)
-        st.markdown(f'<div class="ib">👥 Buddy groups split across raids: {pairs_str}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="ib" style="color:#d4aa55">👥 Buddy groups split: {pairs_str}</div>', unsafe_allow_html=True)
 
 # Balance indicator
 all_scores = [group_score(results.get(k,[])) for k in raid_keys if results.get(k)]
 if len(all_scores) >= 2:
     diff = max(all_scores) - min(all_scores)
     if diff < 200:
-        st.markdown(f'<div class="sb">⚖️ Well balanced — score spread: {diff} pts</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sb" style="color:#60c878">⚖️ Well balanced — score spread: {diff} pts</div>', unsafe_allow_html=True)
     elif diff < 400:
-        st.markdown(f'<div class="ib">⚖️ Reasonably balanced — score spread: {diff} pts</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="ib" style="color:#d4aa55">⚖️ Reasonably balanced — score spread: {diff} pts</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="wb">⚖️ Score imbalance detected ({diff} pts) — consider manual adjustments</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="wb" style="color:#e8785a">⚖️ Score imbalance detected ({diff} pts) — consider manual adjustments</div>', unsafe_allow_html=True)
 
 
 # ── STEP 4 — Raid Overview + Discord Export
@@ -1265,7 +1269,15 @@ if keys_to_export:
                             for p in [x for x in sg if x.role==role]:
                                 col_c = _class_color(p.class_name)
                                 spec  = p.spec if p.spec and p.spec != "—" else p.class_name.title()
-                                icon_url = spec_icon_url(p.class_name, spec)
+                                # If role was manually changed, fall back to class icon
+                                # (spec may no longer match the assigned role)
+                                orig_role = next((x.role for x in results.get(label,[])
+                                                  if x.name_lower == p.name.lower().strip()), p.role)
+                                if orig_role != p.role:
+                                    icon_url = CLASS_ICON_URL.get(p.class_name.lower(),
+                                               f"{ICON_BASE}/class_warrior.jpg")
+                                else:
+                                    icon_url = spec_icon_url(p.class_name, spec)
                                 st.markdown(
                                     f'<div style="display:flex;align-items:center;gap:.5rem;' +
                                     f'background:#0d0d18;border-left:3px solid {col_c};' +
