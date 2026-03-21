@@ -12,6 +12,10 @@ import pandas as pd
 import requests
 import streamlit as st
 
+# ─── INTERNAL VERSION MARKER — do not remove ───────────────────
+# APP_FILE_VERSION = "v1.8.5"
+# ───────────────────────────────────────────────────────────────
+
 API_BASE   = "https://raid-helper.dev/api"
 DAY_LABELS = ["Sunday", "Monday", "Tuesday"]
 DAY_EMOJI  = ["☀️", "🌙", "⚔️"]
@@ -1225,7 +1229,7 @@ else:
         with c1:
             if st.button("✅  Yes, push all", use_container_width=True):
                 st.session_state["push_confirm"] = False
-                errors,successes = [],[]
+                errors, successes, comp_links = [], [], []
                 for i,label in enumerate([k for k in edited_groups if "Bench" not in k]):
                     if i >= len(sel_events): break
                     eid = str(sel_events[i].get("id",""))
@@ -1237,9 +1241,22 @@ else:
                                   "subgroup":   int(r.get("SG", 1)),
                               } for r in edited_groups.get(label, [])]
                     ok,msg = push_composition(eid, api_key_sess, pdicts)
-                    (successes if ok else errors).append(label if ok else f"{label}: {msg}")
+                    if ok:
+                        successes.append(label)
+                        comp_links.append((label, eid))
+                    else:
+                        errors.append(f"{label}: {msg}")
                 if successes:
                     st.markdown(f'<div class="sb">✅ Pushed: {", ".join(successes)}</div>', unsafe_allow_html=True)
+                    for lbl, eid in comp_links:
+                        comp_url = f"https://raid-helper.dev/comp/{eid}"
+                        st.markdown(
+                            f'<div class="ib">🔗 <b>{lbl}</b> &nbsp;—&nbsp;' +
+                            f'<a href="{comp_url}" target="_blank" ' +
+                            f'style="color:#c9a84c;text-decoration:underline">' +
+                            f'Open in Raid-Helper Comp Tool →</a></div>',
+                            unsafe_allow_html=True
+                        )
                 for err in errors:
                     st.markdown(f'<div class="wb">❌ {err}</div>', unsafe_allow_html=True)
         with c2:
