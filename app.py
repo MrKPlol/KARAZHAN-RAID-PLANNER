@@ -918,9 +918,7 @@ with st.sidebar:
                                   label_visibility="collapsed", key="avoid_input",
                                   help="Format: PlayerA=!PlayerB\nThese two players will never be placed in the same group.\nIf unavoidable, the rule is relaxed automatically.\nExample: Vowly=!Vapecum",
                                   placeholder="Vowly=!Vapecum")
-        st.markdown("""<div style='font-family:"Crimson Pro",serif;font-size:.75rem;color:#7a6030;margin-top:.2rem'>
-        Format: <code style='color:#c9a84c'>PlayerA=!PlayerB</code> — never in the same group.<br>
-        Relaxed automatically if unavoidable.</div>""", unsafe_allow_html=True)
+
 
     st.markdown("---")
     st.markdown(f"""<div style='font-family:"Crimson Pro",serif;font-size:.72rem;color:#3a2e18;text-align:center;margin-top:.5rem'>
