@@ -843,16 +843,16 @@ with st.sidebar:
     # ── Role Overrides + Fixed + Buddies + Avoid (collapsed by default)
     st.markdown("---")
     with st.expander("⚙️ Composition Rules", expanded=False):
-        st.text_area("🎭 Role Overrides", value=DEFAULT_OVERRIDES, height=65,
+        override_raw = st.text_area("🎭 Role Overrides", value=DEFAULT_OVERRIDES, height=65,
                      key="override_input",
                      help="Format: Name=Role\nForce a player into a specific role regardless of their Raid-Helper sign-up.\nRoles: Tank / Healer / DPS\nExample: Stone=Tank")
-        st.text_area("📌 Fixed Days", value=DEFAULT_FIXED, height=65,
+        fixed_raw = st.text_area("📌 Fixed Days", value=DEFAULT_FIXED, height=65,
                      key="fixed_input",
                      help="Format: Name=Day\nLock a player to a specific raid day.\nDays: Sunday / Monday / Tuesday / Friday etc.\nExample: Stone=Monday")
-        st.text_area("👥 Buddy Groups", value=DEFAULT_BUDDIES, height=110,
+        buddy_raw = st.text_area("👥 Buddy Groups", value=DEFAULT_BUDDIES, height=110,
                      key="buddy_input",
                      help="One group per line, names comma-separated.\nBuddies are kept in the same raid if possible (soft preference — not guaranteed).\nExample: Miroga,Terry,Vowly")
-        st.text_area("🧬 Buddy Char", value=DEFAULT_BUDDY_CHAR, height=65,
+        buddy_char_raw = st.text_area("🧬 Buddy Char", value=DEFAULT_BUDDY_CHAR, height=65,
                      key="buddy_char_input",
                      help="Format: Name=Class\nFor players with multiple alts: only this class counts for buddy logic.\nThe other chars still raid freely.\nExample: Rock=Paladin")
 
@@ -918,7 +918,7 @@ if avoid_pairs:
 # ── STEP 2
 st.markdown('<div class="sh">⚔️ Step 2 — Build Compositions</div>', unsafe_allow_html=True)
 
-if st.button("⚔️  Calculate Raid Compositions", use_container_width=True):
+if st.button("⚔️  Calculate Raid Compositions", width='stretch'):
     players_by_day: dict = {}
     day_info    = make_day_info(selected_events)
     dynamic_map = make_dynamic_day_map(day_info)
@@ -971,7 +971,7 @@ if "results" in st.session_state and st.session_state.get("enable_parse_group"):
                 unsafe_allow_html=True,
             )
         with col_btn:
-            if st.button("🔄 Apply", use_container_width=True,
+            if st.button("🔄 Apply", width='stretch',
                          help="Recalculate with current Parse Group settings"):
                 _new = build_all_raids(
                     st.session_state["_players_by_day"],
@@ -1023,7 +1023,7 @@ for label in raid_keys+[bench_key]:
 flat_df       = pd.DataFrame(all_rows) if all_rows else pd.DataFrame(columns=["Name","Class","Spec","Role","Group","SG","✅ Confirmed Days"])
 group_options = raid_keys+[bench_key]
 
-edited_df = st.data_editor(flat_df, use_container_width=True, hide_index=True, num_rows="fixed",
+edited_df = st.data_editor(flat_df, width='stretch', hide_index=True, num_rows="fixed",
     column_config={
         "Name":     st.column_config.TextColumn("Name",      disabled=True, width="medium"),
         "Class":    st.column_config.TextColumn("Class",     disabled=True, width="small"),
@@ -1226,14 +1226,14 @@ if keys_to_export:
 st.markdown('<div class="sh" style="margin-top:1rem">🔄 Step 5 — Sync to Raid-Helper</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="ib">Pushes compositions <b>incl. subgroup assignments</b> to Raid-Helper. Cannot be undone.</div>', unsafe_allow_html=True)
-if st.button("🚀  Push Compositions to Raid-Helper", type="primary", use_container_width=True):
+if st.button("🚀  Push Compositions to Raid-Helper", type="primary", width='stretch'):
         st.session_state["push_confirm"] = True
 
 if st.session_state.get("push_confirm"):
         st.warning("⚠️ **Are you sure?** This overwrites all event compositions in Raid-Helper.")
         c1,c2 = st.columns(2)
         with c1:
-            if st.button("✅  Yes, push all", use_container_width=True):
+            if st.button("✅  Yes, push all", width='stretch'):
                 st.session_state["push_confirm"] = False
                 errors, successes, comp_links = [], [], []
                 for i,label in enumerate([k for k in edited_groups if "Bench" not in k]):
@@ -1266,6 +1266,6 @@ if st.session_state.get("push_confirm"):
                 for err in errors:
                     st.markdown(f'<div class="wb">❌ {err}</div>', unsafe_allow_html=True)
         with c2:
-            if st.button("❌  Cancel", use_container_width=True):
+            if st.button("❌  Cancel", width='stretch'):
                 st.session_state["push_confirm"] = False
                 st.rerun()
