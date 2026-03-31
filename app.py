@@ -147,7 +147,7 @@ def _get_version() -> str:
 
 APP_VERSION = _get_version()
 
-DEFAULT_BUDDIES  = "Ketaminkåre,Tuva\nMiroga,Terry,Vowly\nXylvia,Rock\nMb,Langballje\nStone,Pumpyy"
+DEFAULT_BUDDIES  = "Ketaminkåre,Tuva\nMiroga,Terry,Vowly/Voidling\nXylvia,Rock\nMb,Langballje\nStone,Pumpyy"
 DEFAULT_FIXED    = ""
 DEFAULT_OVERRIDES= "Stone=Tank"
 DEFAULT_AVOID    = "Vowly/Voidling=!Vapecum"
@@ -674,19 +674,27 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
     for p in all_players:
         if len(p.avail_days)==1: excl_count[p.avail_days[0]] += 1
 
+    # Count available tanks/healers per day (anyone available that day)
+    tank_avail: dict = defaultdict(int)
+    heal_avail: dict = defaultdict(int)
+    for p in all_players:
+        for d in p.avail_days:
+            if p.role == "Tank":   tank_avail[d] += 1
+            elif p.role == "Healer": heal_avail[d] += 1
+
     # Raid slot logic:
-    # - Goal: always fill up to 3 raids total across all selected events
-    # - Each event starts with 1 slot by default
-    # - ≥18 exclusive sign-ups → A/B split (2 slots)
-    # - ≥27 exclusive sign-ups → A/B/C split (3 slots, each group gets a solid base)
-    # - Boost loop fills remaining slots up to MAX_RAIDS on the busiest event
-    # - Max 3 raids ever (max 3 slots per event)
+    # - ≥18 exclusive sign-ups → A/B split; ≥27 → A/B/C split
+    # - Hard cap: need 1 tank + 2 healers per raid — never create more raids than
+    #   available tanks or floor(healers/2) allow.
     MAX_RAIDS = 3
 
     raids_per_day: dict = {}
     for d in all_day_idxs:
         excl = excl_count.get(d, 0)
-        raids_per_day[d] = 3 if excl >= 27 else (2 if excl >= 18 else 1)
+        excl_based = 3 if excl >= 27 else (2 if excl >= 18 else 1)
+        max_by_tanks   = max(1, tank_avail.get(d, 0))
+        max_by_healers = max(1, heal_avail.get(d, 0) // 2)
+        raids_per_day[d] = min(excl_based, max_by_tanks, max_by_healers, MAX_RAIDS)
 
     total  = sum(raids_per_day.values())
     active = sorted([d for d in all_day_idxs if raw_count.get(d, 0) >= 10],
@@ -695,7 +703,8 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         bumped = False
         for d in active:
             if total >= MAX_RAIDS: break
-            if raids_per_day.get(d, 0) < MAX_RAIDS and raw_count.get(d, 0) >= 10:
+            cap = min(tank_avail.get(d,0), heal_avail.get(d,0)//2, MAX_RAIDS)
+            if raids_per_day.get(d, 0) < cap and raw_count.get(d, 0) >= 10:
                 raids_per_day[d] += 1; total += 1; bumped = True
         if not bumped: break
 
@@ -776,10 +785,9 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
     def _cur_score(label): return group_score(results[label]) if results[label] else 0
 
     # ── Pass 1: Exclusive players ─────────────────────────────────────────────
-    # Tanks + Healers: fill each slot greedily (role-capped anyway).
-    # DPS: distribute round-robin across same-day slots to prevent class stacking.
+    # Tanks only — 1 per slot, greedy per slot is fine.
+    # Healers + DPS: distributed round-robin after the tank pass.
     for day_idx,label in slot_labels:
-        # Skip players pre-assigned to a different slot on this day
         pool = [p for p in all_players
                 if len(p.avail_days)==1 and p.avail_days[0]==day_idx and not p.assigned
                 and buddy_slot_pre.get(p.name_lower, label) == label]
@@ -787,45 +795,40 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
                       if p.name_lower in fixed_assignments and fixed_assignments[p.name_lower]==day_idx]
         others = [p for p in pool if p not in fixed_here]
 
-        def rq(role):
-            buddy_first = [p for p in others if p.role==role and buddy_slot_pre.get(p.name_lower)==label]
-            rest        = [p for p in others if p.role==role and p not in buddy_first]
-            return [p for p in fixed_here if p.role==role] + buddy_first + rest
+        def rq_tank():
+            buddy_first = [p for p in others if p.role=="Tank" and buddy_slot_pre.get(p.name_lower)==label]
+            rest        = [p for p in others if p.role=="Tank" and p not in buddy_first]
+            return [p for p in fixed_here if p.role=="Tank"] + buddy_first + rest
 
         group = results[label]
-        for p in rq("Tank"):
+        for p in rq_tank():
             if sum(1 for x in group if x.role=="Tank") >= TARGET["Tank"]: break
             if _avoid_conflict(p,group,avoid_pairs): continue
             group.append(p); p.assigned=True; p.group_key=label
-        for p in rq("Healer"):
-            if p.assigned: continue
-            if sum(1 for x in group if x.role=="Healer") >= TARGET["Healer"]: break
-            if _avoid_conflict(p,group,avoid_pairs): continue
-            group.append(p); p.assigned=True; p.group_key=label
-        # DPS assigned below via round-robin
 
-    # DPS round-robin across same-day slots (prevents all Shamans piling into slot A)
+    # Healers + DPS round-robin across same-day slots
+    # Prevents class stacking (e.g. both Resto Shamans in slot A)
     _day_to_slots: dict = {}
     for day_idx, lbl in slot_labels:
         _day_to_slots.setdefault(day_idx, []).append(lbl)
 
-    for day_idx, day_slot_lbls in _day_to_slots.items():
-        # All unassigned exclusive DPS for this day, buddy-pre-assigned first
-        dps_excl = [p for p in all_players
-                    if p.role=="DPS" and len(p.avail_days)==1
-                    and p.avail_days[0]==day_idx and not p.assigned]
-        dps_excl.sort(key=lambda p: (
+    def _rr_assign(role, target_count, day_idx, day_slot_lbls):
+        """Round-robin assign exclusive players of `role` across slots for a day."""
+        pool = [p for p in all_players
+                if p.role==role and len(p.avail_days)==1
+                and p.avail_days[0]==day_idx and not p.assigned]
+        pool.sort(key=lambda p: (
             0 if buddy_slot_pre.get(p.name_lower) else 1,
             0 if p.name_lower in fixed_assignments else 1,
         ))
         slot_idx = 0
-        for p in dps_excl:
+        for p in pool:
             placed = False
-            # Two passes: first respecting buddy/avoid, then relaxing avoid if needed
             for strict_avoid in (True, False):
                 for attempt in range(len(day_slot_lbls)):
                     lbl = day_slot_lbls[(slot_idx + attempt) % len(day_slot_lbls)]
                     if _free(lbl) <= 0: continue
+                    if sum(1 for x in results[lbl] if x.role==role) >= target_count: continue
                     if strict_avoid and _avoid_conflict(p, results[lbl], avoid_pairs): continue
                     if buddy_slot_pre.get(p.name_lower, lbl) != lbl: continue
                     results[lbl].append(p); p.assigned=True; p.group_key=lbl
@@ -833,13 +836,16 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
                     placed = True; break
                 if placed: break
             if not placed:
-                # Last resort: ignore buddy constraint too
                 for attempt in range(len(day_slot_lbls)):
                     lbl = day_slot_lbls[(slot_idx + attempt) % len(day_slot_lbls)]
-                    if _free(lbl) > 0:
+                    if _free(lbl) > 0 and sum(1 for x in results[lbl] if x.role==role) < target_count:
                         results[lbl].append(p); p.assigned=True; p.group_key=lbl
                         slot_idx = (slot_idx + 1) % len(day_slot_lbls)
                         break
+
+    for day_idx, day_slot_lbls in _day_to_slots.items():
+        _rr_assign("Healer", TARGET["Healer"], day_idx, day_slot_lbls)
+        _rr_assign("DPS",    TARGET["DPS"],    day_idx, day_slot_lbls)
 
     # Pass 2: Flex players — equity-aware, score-guided, buddy-coherent
     # Priority: 1. parse group  2. buddy slot  3. role need + score + equity
