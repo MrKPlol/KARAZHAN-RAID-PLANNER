@@ -813,7 +813,9 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         _day_to_slots.setdefault(day_idx, []).append(lbl)
 
     def _rr_assign(role, target_count, day_idx, day_slot_lbls):
-        """Round-robin assign exclusive players of `role` across slots for a day."""
+        """Assign exclusive players of `role` across slots for a day.
+        Picks the slot with the fewest same-class players (class equity),
+        then fewest same-role players, then slot order — no blind round-robin."""
         pool = [p for p in all_players
                 if p.role==role and len(p.avail_days)==1
                 and p.avail_days[0]==day_idx and not p.assigned]
@@ -821,26 +823,29 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             0 if buddy_slot_pre.get(p.name_lower) else 1,
             0 if p.name_lower in fixed_assignments else 1,
         ))
-        slot_idx = 0
         for p in pool:
             placed = False
+
+            def _slot_pref(lbl):
+                cls_cnt  = sum(1 for x in results[lbl] if x.class_name.lower() == p.class_name.lower())
+                role_cnt = sum(1 for x in results[lbl] if x.role == role)
+                return (cls_cnt, role_cnt, day_slot_lbls.index(lbl))
+
             for strict_avoid in (True, False):
-                for attempt in range(len(day_slot_lbls)):
-                    lbl = day_slot_lbls[(slot_idx + attempt) % len(day_slot_lbls)]
+                for lbl in sorted(day_slot_lbls, key=_slot_pref):
                     if _free(lbl) <= 0: continue
                     if sum(1 for x in results[lbl] if x.role==role) >= target_count: continue
                     if strict_avoid and _avoid_conflict(p, results[lbl], avoid_pairs): continue
                     if buddy_slot_pre.get(p.name_lower, lbl) != lbl: continue
                     results[lbl].append(p); p.assigned=True; p.group_key=lbl
-                    slot_idx = (slot_idx + 1) % len(day_slot_lbls)
                     placed = True; break
                 if placed: break
             if not placed:
-                for attempt in range(len(day_slot_lbls)):
-                    lbl = day_slot_lbls[(slot_idx + attempt) % len(day_slot_lbls)]
+                for lbl in sorted(day_slot_lbls, key=lambda l: (
+                    sum(1 for x in results[l] if x.role==role), -_free(l)
+                )):
                     if _free(lbl) > 0 and sum(1 for x in results[lbl] if x.role==role) < target_count:
                         results[lbl].append(p); p.assigned=True; p.group_key=lbl
-                        slot_idx = (slot_idx + 1) % len(day_slot_lbls)
                         break
 
     for day_idx, day_slot_lbls in _day_to_slots.items():
