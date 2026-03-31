@@ -395,17 +395,23 @@ def _headers(k: str) -> dict:
 
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_server_events(server_id: str, api_key: str) -> list:
-    url = f"{API_BASE}/v3/servers/{server_id}/events"
-    try:
-        r = requests.get(url, headers=_headers(api_key), timeout=10)
-        r.raise_for_status()
-        d = r.json()
-        return d if isinstance(d,list) else (d.get("postedEvents") or d.get("events") or [])
-    except requests.HTTPError as e:
-        st.error(f"API {e.response.status_code}: {e.response.text[:200]}")
-        return []
-    except Exception as e:
-        st.error(f"Network: {e}"); return []
+    # Try v2 first (v3 servers endpoint was removed), fall back to v3 if needed
+    for version in ("v2", "v3"):
+        url = f"{API_BASE}/{version}/servers/{server_id}/events"
+        try:
+            r = requests.get(url, headers=_headers(api_key), timeout=10)
+            if r.status_code == 404:
+                continue  # try next version
+            r.raise_for_status()
+            d = r.json()
+            return d if isinstance(d,list) else (d.get("postedEvents") or d.get("events") or [])
+        except requests.HTTPError as e:
+            st.error(f"API {e.response.status_code}: {e.response.text[:200]}")
+            return []
+        except Exception as e:
+            st.error(f"Network: {e}"); return []
+    st.error("API 404: Server events endpoint not found (tried v2 and v3).")
+    return []
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_event_detail(event_id: str, api_key: str) -> dict:
