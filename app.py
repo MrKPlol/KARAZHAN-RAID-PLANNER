@@ -991,6 +991,15 @@ with st.spinner("Loading events..."):
     raw_events = fetch_server_events(server_id, api_key)
 if not raw_events:
     st.markdown('<div class="wb">❌ No events found. Check your <code>secrets.toml</code>.</div>', unsafe_allow_html=True)
+    _sid_ok  = bool(server_id)
+    _key_ok  = bool(api_key)
+    _key_masked = (api_key[:4] + "…" + api_key[-4:]) if len(api_key) >= 8 else ("(empty)" if not api_key else "(too short)")
+    st.info(
+        f"**Debug info**\n"
+        f"- `RAID_HELPER_SERVER_ID`: `{server_id if _sid_ok else '(empty)'}` {'✅' if _sid_ok else '❌'}\n"
+        f"- `RAID_HELPER_API_KEY`: `{_key_masked}` {'✅' if _key_ok else '❌'}\n"
+        f"- API base: `{API_BASE}`"
+    )
     st.stop()
 _,col_t = st.columns([3,1])
 with col_t:
