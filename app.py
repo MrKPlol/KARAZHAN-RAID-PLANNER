@@ -110,17 +110,27 @@ SPEC_ICON_URL: dict = {
     "demonology":     f"{ICON_BASE}/warlock_demonology.jpg",
     "destruction":    f"{ICON_BASE}/warlock_destruction.jpg",
     # Druid
-    "balance":        f"{ICON_BASE}/druid_balance.jpg",
-    "feral":          f"{ICON_BASE}/druid_feral.jpg",
-    "guardian":       f"{ICON_BASE}/druid_guardian.jpg",
+    "balance":             f"{ICON_BASE}/druid_balance.jpg",
+    "feral":               f"{ICON_BASE}/druid_feral.jpg",
+    "guardian":            f"{ICON_BASE}/druid_guardian.jpg",
+    # Class-qualified keys — used when spec name is ambiguous across classes
+    "druid_restoration":   f"{ICON_BASE}/druid_restoration.jpg",
+    "shaman_restoration":  f"{ICON_BASE}/shaman_restoration.jpg",
+    "shaman_restoration1": f"{ICON_BASE}/shaman_restoration.jpg",
 }
 
 def spec_icon_url(cls: str, spec: str) -> str:
     """Returns the best icon URL for a given class+spec combination."""
     spec_key = spec.lower().strip()
+    cls_key  = cls.lower().strip()
+    # Try class-qualified key first to resolve ambiguous specs
+    # (e.g. "restoration" exists for both Druid and Shaman)
+    combined = f"{cls_key}_{spec_key}"
+    if combined in SPEC_ICON_URL:
+        return SPEC_ICON_URL[combined]
     if spec_key in SPEC_ICON_URL:
         return SPEC_ICON_URL[spec_key]
-    return CLASS_ICON_URL.get(cls.lower().strip(), f"{ICON_BASE}/class_warrior.jpg")
+    return CLASS_ICON_URL.get(cls_key, f"{ICON_BASE}/class_warrior.jpg")
 TARGET         = {"Tank":1,"Healer":2,"DPS":7}
 RAID_SIZE      = 10
 KARA_KEYWORDS  = ["kara","karazhan","karaz"]
@@ -138,9 +148,9 @@ def _get_version() -> str:
 APP_VERSION = _get_version()
 
 DEFAULT_BUDDIES  = "Ketaminkåre,Tuva\nMiroga,Terry,Vowly\nXylvia,Rock\nMb,Langballje\nStone,Pumpyy"
-DEFAULT_FIXED    = "Stone=Monday\nPumpyy=Monday"
+DEFAULT_FIXED    = ""
 DEFAULT_OVERRIDES= "Stone=Tank"
-DEFAULT_AVOID    = "Vowly=!Vapecum"
+DEFAULT_AVOID    = "Vowly/Voidling=!Vapecum"
 DEFAULT_BUDDY_CHAR  = "Rock=Paladin"  # For buddy logic only: use this char. Other chars raid freely.
 
 # ── DATA CLASS
@@ -718,8 +728,18 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
     # ── Buddy slot pre-assignment ─────────────────────────────────────────────
     # For each buddy group, pick ONE target slot so all members land together.
     # This fixes splits when A/B/C split creates multiple slots on the same day.
+    # Process groups with Tanks first so they claim a slot before other groups.
     buddy_slot_pre: dict[str, str] = {}  # name_lower → target slot label
-    for bset in buddy_groups:
+    _slot_roles_claimed: dict[str, set] = {}  # slot label → roles already claimed by buddy groups
+
+    def _sort_buddy_key(bs):
+        for n in bs:
+            for p in all_players:
+                if p.name_lower == n and p.role == "Tank":
+                    return 0
+        return 1
+
+    for bset in sorted(buddy_groups, key=_sort_buddy_key):
         bps = []
         for name in bset:
             candidates = [p for p in all_players if p.name_lower == name]
@@ -735,12 +755,29 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         for bp in bps[1:]: common_days &= set(bp.avail_days)
         avail_slots = [(di, lbl) for di, lbl in slot_labels if di in common_days]
         if not avail_slots: continue
+        bp_roles = {p.role for p in bps}
+        # Prefer a slot that has no role conflict (especially Tank) with other buddy groups
         chosen = avail_slots[0][1]
+        for _, lbl in avail_slots:
+            already = _slot_roles_claimed.get(lbl, set())
+            if not (already & bp_roles):  # no role overlap
+                chosen = lbl
+                break
+        _slot_roles_claimed.setdefault(chosen, set()).update(bp_roles)
         for bp in bps:
             if bp.name_lower not in buddy_slot_pre:
                 buddy_slot_pre[bp.name_lower] = chosen
 
+    # ── Helpers used by all passes ────────────────────────────────────────────
+    def _role_need(role, label):
+        have = sum(1 for x in results[label] if x.role==role)
+        return max(0, TARGET[role]-have)
+    def _free(label): return RAID_SIZE-len(results[label])
+    def _cur_score(label): return group_score(results[label]) if results[label] else 0
+
     # ── Pass 1: Exclusive players ─────────────────────────────────────────────
+    # Tanks + Healers: fill each slot greedily (role-capped anyway).
+    # DPS: distribute round-robin across same-day slots to prevent class stacking.
     for day_idx,label in slot_labels:
         # Skip players pre-assigned to a different slot on this day
         pool = [p for p in all_players
@@ -765,11 +802,44 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             if sum(1 for x in group if x.role=="Healer") >= TARGET["Healer"]: break
             if _avoid_conflict(p,group,avoid_pairs): continue
             group.append(p); p.assigned=True; p.group_key=label
-        dps_need = RAID_SIZE-len(group); done=0
-        for p in rq("DPS"):
-            if p.assigned or done>=dps_need: break
-            if _avoid_conflict(p,group,avoid_pairs): continue
-            group.append(p); p.assigned=True; p.group_key=label; done+=1
+        # DPS assigned below via round-robin
+
+    # DPS round-robin across same-day slots (prevents all Shamans piling into slot A)
+    _day_to_slots: dict = {}
+    for day_idx, lbl in slot_labels:
+        _day_to_slots.setdefault(day_idx, []).append(lbl)
+
+    for day_idx, day_slot_lbls in _day_to_slots.items():
+        # All unassigned exclusive DPS for this day, buddy-pre-assigned first
+        dps_excl = [p for p in all_players
+                    if p.role=="DPS" and len(p.avail_days)==1
+                    and p.avail_days[0]==day_idx and not p.assigned]
+        dps_excl.sort(key=lambda p: (
+            0 if buddy_slot_pre.get(p.name_lower) else 1,
+            0 if p.name_lower in fixed_assignments else 1,
+        ))
+        slot_idx = 0
+        for p in dps_excl:
+            placed = False
+            # Two passes: first respecting buddy/avoid, then relaxing avoid if needed
+            for strict_avoid in (True, False):
+                for attempt in range(len(day_slot_lbls)):
+                    lbl = day_slot_lbls[(slot_idx + attempt) % len(day_slot_lbls)]
+                    if _free(lbl) <= 0: continue
+                    if strict_avoid and _avoid_conflict(p, results[lbl], avoid_pairs): continue
+                    if buddy_slot_pre.get(p.name_lower, lbl) != lbl: continue
+                    results[lbl].append(p); p.assigned=True; p.group_key=lbl
+                    slot_idx = (slot_idx + 1) % len(day_slot_lbls)
+                    placed = True; break
+                if placed: break
+            if not placed:
+                # Last resort: ignore buddy constraint too
+                for attempt in range(len(day_slot_lbls)):
+                    lbl = day_slot_lbls[(slot_idx + attempt) % len(day_slot_lbls)]
+                    if _free(lbl) > 0:
+                        results[lbl].append(p); p.assigned=True; p.group_key=lbl
+                        slot_idx = (slot_idx + 1) % len(day_slot_lbls)
+                        break
 
     # Pass 2: Flex players — equity-aware, score-guided, buddy-coherent
     # Priority: 1. parse group  2. buddy slot  3. role need + score + equity
@@ -778,12 +848,6 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         0 if p.name_lower in fixed_assignments else 1,
         0 if p.role=="Tank" else (1 if p.role=="Healer" else 2),
     ))
-
-    def _role_need(role, label):
-        have = sum(1 for x in results[label] if x.role==role)
-        return max(0, TARGET[role]-have)
-    def _free(label): return RAID_SIZE-len(results[label])
-    def _cur_score(label): return group_score(results[label]) if results[label] else 0
 
     # Buddy peer lookup for Pass 2
     _buddy_peers: dict[str, set] = {}
@@ -830,11 +894,12 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         results[best_lbl].append(p); p.assigned=True; p.group_key=best_lbl
 
     # Pass 3: rescue — don't bench anyone who could fill an incomplete group
+    # Sort: most-needed role first, then prefer nearly-full groups (fewest free slots)
     for p in [x for x in all_players if not x.assigned]:
         rescue = [(di,lbl) for di,lbl in slot_labels
                   if di in p.avail_days and _free(lbl)>0]
         if rescue:
-            rescue.sort(key=lambda e: (-_role_need(p.role,e[1]), -_free(e[1])))
+            rescue.sort(key=lambda e: (-_role_need(p.role,e[1]), _free(e[1])))
             _, best = rescue[0]
             results[best].append(p); p.assigned=True; p.group_key=best
 
