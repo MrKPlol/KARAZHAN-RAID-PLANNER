@@ -16,7 +16,7 @@ import streamlit as st
 # APP_FILE_VERSION = "v1.9.0"
 # ───────────────────────────────────────────────────────────────
 
-API_BASE   = "https://raid-helper.dev/api"
+API_BASE   = "https://raid-helper.xyz/api"
 DAY_LABELS = ["Sunday", "Monday", "Tuesday"]
 DAY_EMOJI  = ["☀️", "🌙", "⚔️"]
 
@@ -391,31 +391,26 @@ def assign_subgroups(players: list) -> list:
 
 # ── API HELPERS
 def _headers(k: str) -> dict:
+    # Raid-Helper v4: Authorization header is the raw api key, no Bearer prefix
     return {"Authorization": k, "Content-Type": "application/json"}
 
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_server_events(server_id: str, api_key: str) -> list:
-    # Raid-Helper migrated to v4 — fall back to v3 if v4 is not yet available
-    for version in ("v4", "v3", "v2"):
-        url = f"{API_BASE}/{version}/servers/{server_id}/events"
-        try:
-            r = requests.get(url, headers=_headers(api_key), timeout=10)
-            if r.status_code == 404:
-                continue
-            r.raise_for_status()
-            d = r.json()
-            return d if isinstance(d,list) else (d.get("postedEvents") or d.get("events") or [])
-        except requests.HTTPError as e:
-            st.error(f"API {e.response.status_code}: {e.response.text[:200]}")
-            return []
-        except Exception as e:
-            st.error(f"Network: {e}"); return []
-    st.error("API 404: Server-Events-Endpoint nicht gefunden (v4/v3/v2 alle gescheitert). API-Key und Server-ID prüfen.")
-    return []
+    url = f"{API_BASE}/v4/servers/{server_id}/events"
+    try:
+        r = requests.get(url, headers=_headers(api_key), timeout=10)
+        r.raise_for_status()
+        d = r.json()
+        return d if isinstance(d,list) else (d.get("postedEvents") or d.get("events") or [])
+    except requests.HTTPError as e:
+        st.error(f"API {e.response.status_code}: {e.response.text[:200]}")
+        return []
+    except Exception as e:
+        st.error(f"Network: {e}"); return []
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_event_detail(event_id: str, api_key: str) -> dict:
-    url = f"{API_BASE}/v2/events/{event_id}"
+    url = f"{API_BASE}/v4/events/{event_id}"
     try:
         r = requests.get(url, headers=_headers(api_key), timeout=10)
         r.raise_for_status(); return r.json()
