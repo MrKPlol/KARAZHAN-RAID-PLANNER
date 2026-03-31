@@ -888,12 +888,19 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             fr = _free(lbl)
             is_buddy_slot = bool(bpref) and lbl == bpref
 
+            # Class equity tiebreaker: prefer the group with fewer players of
+            # the same class — prevents stacking (e.g. 3 Shamans in one raid).
+            # Only applied to DPS; tanks/healers are already role-capped.
+            cls_eq = (sum(1 for x in results[lbl]
+                          if x.class_name.lower() == p.class_name.lower())
+                      if p.role == "DPS" else 0)
+
             if parse_group_label and lbl == parse_group_label and rn > 0:
-                return (0, -(sg + eq + parse_boost), -fr, entry[0])
+                return (0, -(sg + eq + parse_boost), cls_eq, -fr, entry[0])
             elif is_buddy_slot:
-                return (1, -rn, -(sg + eq + 200), -fr)
+                return (1, -rn, -(sg + eq + 200), cls_eq, -fr)
             else:
-                return (2, -rn, -(sg + eq), -fr)
+                return (2, -rn, -(sg + eq), cls_eq, -fr)
 
         cands.sort(key=_key)
         _, best_lbl = cands[0]
