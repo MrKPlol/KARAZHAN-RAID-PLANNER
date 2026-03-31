@@ -609,7 +609,8 @@ def _avoid_conflict(player: Player, group: list, avoid_pairs: list) -> bool:
 def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups: list,
                     day_info: dict | None = None, avoid_pairs: list | None = None,
                     parse_group_label: str = "", parse_boost: int = 0,
-                    buddy_char: dict | None = None) -> dict:
+                    buddy_char: dict | None = None,
+                    event_ids: dict | None = None) -> tuple:
     if day_info is None:
         day_info = {i:(DAY_EMOJI[i] if i<3 else "📅", DAY_LABELS[i] if i<3 else f"Day {i}") for i in range(3)}
     if avoid_pairs is None: avoid_pairs = []
@@ -670,10 +671,11 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
 
     # Raid slot logic:
     # - Goal: always fill up to 3 raids total across all selected events
-    # - Each event starts with 1 slot if ≥10 sign-ups, 0 if fewer
-    # - A/B split (2 slots on one day) is always allowed if ≥18 exclusive sign-ups
-    # - The boost loop fills remaining slots on the busiest day until total = 3
-    # - Max 3 raids ever (max 2 slots per day)
+    # - Each event starts with 1 slot by default
+    # - ≥18 exclusive sign-ups → A/B split (2 slots)
+    # - ≥27 exclusive sign-ups → A/B/C split (3 slots, each group gets a solid base)
+    # - Boost loop fills remaining slots up to MAX_RAIDS on the busiest event
+    # - Max 3 raids ever (max 3 slots per event)
     MAX_RAIDS = 3
 
     raids_per_day: dict = {}
@@ -681,8 +683,7 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         excl = excl_count.get(d, 0)
         # Always create at least 1 slot per selected event — even with <10 sign-ups.
         # Exclusive players must always have a home; leftovers fill in via Pass 3.
-        # A/B split only when ≥18 exclusive sign-ups on that day.
-        raids_per_day[d] = 2 if excl >= 18 else 1
+        raids_per_day[d] = 3 if excl >= 27 else (2 if excl >= 18 else 1)
 
     total  = sum(raids_per_day.values())
     active = sorted([d for d in all_day_idxs if raw_count.get(d, 0) >= 10],
@@ -691,31 +692,77 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         bumped = False
         for d in active:
             if total >= MAX_RAIDS: break
-            if raids_per_day.get(d, 0) < 2 and raw_count.get(d, 0) >= 10:
+            if raids_per_day.get(d, 0) < MAX_RAIDS and raw_count.get(d, 0) >= 10:
                 raids_per_day[d] += 1; total += 1; bumped = True
         if not bumped: break
 
+    # Build slot labels — detect duplicate day names across events and add a sequence
+    # suffix so two Monday events don't produce identical labels (dict-key collision).
+    _dn_count: dict = {}
+    for di in all_day_idxs:
+        _, dn_tmp = day_info.get(di, ("📅", f"Day {di}"))
+        _dn_count[dn_tmp] = _dn_count.get(dn_tmp, 0) + 1
+    _dn_seq: dict = {}
+
     slot_labels: list[tuple] = []
+    slot_event_id_map: dict[str, str] = {}
     for day_idx in all_day_idxs:
-        n = raids_per_day.get(day_idx,0)
-        em,dn = day_info.get(day_idx,("📅",f"Day {day_idx}"))
-        for slot in range(1, n+1):
-            lbl = f"{em} {dn}" if n==1 else f"{em} {dn} {'AB'[slot-1]}"
-            slot_labels.append((day_idx,lbl))
+        n = raids_per_day.get(day_idx, 0)
+        em, dn = day_info.get(day_idx, ("📅", f"Day {day_idx}"))
+        if _dn_count.get(dn, 1) > 1:
+            _dn_seq[dn] = _dn_seq.get(dn, 0) + 1
+            display_dn = f"{dn} #{_dn_seq[dn]}"
+        else:
+            display_dn = dn
+        for slot in range(1, n + 1):
+            lbl = f"{em} {display_dn}" if n == 1 else f"{em} {display_dn} {'ABC'[slot-1]}"
+            slot_labels.append((day_idx, lbl))
+            slot_event_id_map[lbl] = event_ids.get(day_idx, "") if event_ids else ""
 
     results: dict = {lbl:[] for _,lbl in slot_labels}
     results["🪑 Bench"] = []
 
-    # Pass 1: Exclusive players
+    # ── Buddy slot pre-assignment ─────────────────────────────────────────────
+    # For each buddy group, determine the ONE slot they should all end up in.
+    # This fixes splits when there is an A/B/C split on the same day.
+    buddy_slot_pre: dict[str, str] = {}  # name_lower → target slot label
+    for bset in buddy_groups:
+        bps = []
+        for name in bset:
+            candidates = [p for p in all_players if p.name_lower == name]
+            if not candidates: continue
+            req_cls = buddy_char.get(name)
+            if req_cls:
+                match = next((p for p in candidates if p.class_name.lower() == req_cls), None)
+                if match: bps.append(match)
+            else:
+                bps.extend(candidates)
+        if len(bps) < 2: continue
+        common_days = set(bps[0].avail_days)
+        for bp in bps[1:]: common_days &= set(bp.avail_days)
+        avail_slots = [(di, lbl) for di, lbl in slot_labels if di in common_days]
+        if not avail_slots: continue
+        chosen = avail_slots[0][1]
+        for bp in bps:
+            if bp.name_lower not in buddy_slot_pre:
+                buddy_slot_pre[bp.name_lower] = chosen
+
+    # ── Pass 1: Exclusive players ─────────────────────────────────────────────
     for day_idx,label in slot_labels:
+        # Exclude players pre-assigned to a DIFFERENT slot on this day
+        # (they'll be claimed when that slot is processed, or rescued in Pass 3)
         pool = [p for p in all_players
-                if len(p.avail_days)==1 and p.avail_days[0]==day_idx and not p.assigned]
+                if len(p.avail_days)==1 and p.avail_days[0]==day_idx and not p.assigned
+                and buddy_slot_pre.get(p.name_lower, label) == label]
         fixed_here = [p for p in pool
                       if p.name_lower in fixed_assignments and fixed_assignments[p.name_lower]==day_idx]
         others = [p for p in pool if p not in fixed_here]
 
         def rq(role):
-            return [p for p in fixed_here if p.role==role] + [p for p in others if p.role==role]
+            # Buddy-pre-assigned players for this slot get priority within their tier
+            buddy_first = [p for p in others if p.role==role and buddy_slot_pre.get(p.name_lower)==label]
+            rest        = [p for p in others if p.role==role and p not in buddy_first]
+            return [p for p in fixed_here if p.role==role] + buddy_first + rest
 
         group = results[label]
         for p in rq("Tank"):
@@ -733,9 +780,8 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             if _avoid_conflict(p,group,avoid_pairs): continue
             group.append(p); p.assigned=True; p.group_key=label; done+=1
 
-    # Pass 2: Flex players — equity-aware, score-guided
-    # Priority: 1. role need  2. equity (low-scoring groups attract players)  3. score gain
-    # This keeps all groups fair while still optimising buffs.
+    # Pass 2: Flex players — equity-aware, score-guided, buddy-coherent
+    # Priority: 1. parse group (if active)  2. buddy slot  3. role need + score + equity
     flexible = [p for p in all_players if not p.assigned and len(p.avail_days)>1]
     flexible.sort(key=lambda p: (
         0 if p.name_lower in fixed_assignments else 1,
@@ -747,6 +793,19 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         return max(0, TARGET[role]-have)
     def _free(label): return RAID_SIZE-len(results[label])
     def _cur_score(label): return group_score(results[label]) if results[label] else 0
+
+    # Build buddy peer lookup: name_lower → set of buddy names
+    _buddy_peers: dict[str, set] = {}
+    for bset in buddy_groups:
+        for bn in bset: _buddy_peers[bn] = bset - {bn}
+
+    def _buddy_pref_lbl(p: Player) -> str:
+        """Slot label where p's buddies are already assigned, or pre-assigned slot."""
+        for peer_name in _buddy_peers.get(p.name_lower, set()):
+            peer = next((x for x in all_players if x.name_lower == peer_name and x.assigned), None)
+            if peer:
+                return peer.group_key
+        return buddy_slot_pre.get(p.name_lower, "")
 
     for p in flexible:
         if p.assigned: continue
@@ -760,6 +819,7 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
 
         live_scores = [_cur_score(lbl) for _,lbl in slot_labels]
         avg = sum(live_scores)/len(live_scores) if live_scores else 0
+        bpref = _buddy_pref_lbl(p)
 
         def _key(entry):
             _, lbl = entry
@@ -767,15 +827,17 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             sg = score_gain(p, results[lbl])
             eq = max(0, avg - _cur_score(lbl)) * 0.6
             fr = _free(lbl)
+            is_buddy_slot = bool(bpref) and lbl == bpref
 
             if parse_group_label and lbl == parse_group_label and rn > 0:
-                # Parse group gets absolute priority when it still needs this role.
-                # Tier 0 = parse group (always beats other groups in same tier).
-                # Within tier 0: stronger boost → higher score pull.
+                # Tier 0: parse group has absolute priority when it still needs this role
                 return (0, -(sg + eq + parse_boost), -fr, entry[0])
+            elif is_buddy_slot:
+                # Tier 1: keep buddies together; +200 bonus on top of normal scoring
+                return (1, -rn, -(sg + eq + 200), -fr)
             else:
-                # Normal groups: tier 1, sorted by role need then score.
-                return (1, -rn, -(sg + eq), -fr)
+                # Tier 2: normal equity/score sorting
+                return (2, -rn, -(sg + eq), -fr)
 
         cands.sort(key=_key)
         _, best_lbl = cands[0]
@@ -800,7 +862,7 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         if not p.assigned:
             p.group_key="🪑 Bench"; results["🪑 Bench"].append(p)
 
-    return results
+    return results, slot_event_id_map
 
 # ── DISCORD EXPORT
 def discord_block(label: str, players: list) -> str:
@@ -808,8 +870,8 @@ def discord_block(label: str, players: list) -> str:
     tanks     = [p for p in players if getattr(p,"role","DPS") == "Tank"]
     pala_tank = any(_is_prot_pala(p) for p in tanks) if tanks else True
     sg_labels = {
-        1: ("🔷", "Subgroup 1 — Casters" if pala_tank else "🔶 Subgroup 1 — Melee"),
-        2: ("🔶", "Subgroup 2 — Melee"   if pala_tank else "🔷 Subgroup 2 — Casters"),
+        1: ("🔷", "Subgroup 1 — Casters" if pala_tank else "Subgroup 1 — Melee"),
+        2: ("🔶", "Subgroup 2 — Melee"   if pala_tank else "Subgroup 2 — Casters"),
     }
     lines = [f"**{label}**  [{len(players)}/10]",""]
     for sg in [1, 2]:
@@ -959,13 +1021,13 @@ kara_labels   = [l for l in event_labels if any(kw in l.lower() for kw in KARA_K
 default_sel   = kara_labels[:3] if len(kara_labels)>=3 else event_labels[:3]
 
 st.markdown("""<div class="ib">🏰 <b>Kara events listed first.</b>
-Select <b>2–4 events</b> in chronological order. Two events on the same day → auto A/B split.</div>""", unsafe_allow_html=True)
+Select <b>1–4 events</b> in chronological order. Two events on the same day → auto A/B split. One event with ≥27 sign-ups → auto A/B/C split.</div>""", unsafe_allow_html=True)
 
-selected_labels = st.multiselect("Choose events (2–4, earliest first)",
+selected_labels = st.multiselect("Choose events (1–4, earliest first)",
     options=event_labels, default=default_sel, max_selections=4)
 
-if len(selected_labels) < 2:
-    st.markdown(f'<div class="ib">ℹ️ Select at least <b>2 events</b> (currently {len(selected_labels)}).</div>', unsafe_allow_html=True)
+if len(selected_labels) < 1:
+    st.markdown('<div class="ib">ℹ️ Select at least <b>1 event</b>.</div>', unsafe_allow_html=True)
     st.stop()
 
 selected_events = [event_options[l] for l in selected_labels]
@@ -1006,20 +1068,25 @@ if st.button("⚔️  Calculate Raid Compositions", width='stretch'):
 
     _pg_label = st.session_state.get("parse_group_sel", "") if st.session_state.get("enable_parse_group") else ""
     _pg_boost = st.session_state.get("parse_boost_val", 0) if st.session_state.get("enable_parse_group") else 0
-    results   = build_all_raids(players_by_day, dyn_fixed, buddy_groups, day_info, avoid_pairs, _pg_label, _pg_boost)
+    event_ids = {idx: str(ev.get("id","")) for idx, ev in enumerate(selected_events)}
+    results, slot_event_id_map = build_all_raids(
+        players_by_day, dyn_fixed, buddy_groups, day_info, avoid_pairs,
+        _pg_label, _pg_boost, buddy_char, event_ids)
     # Store everything needed for live-rebuild when parse settings change
     st.session_state.update({
-        "results":         results,
-        "selected_events": selected_events,
-        "api_key_used":    api_key,
-        "day_info":        day_info,
+        "results":           results,
+        "slot_event_id_map": slot_event_id_map,
+        "selected_events":   selected_events,
+        "api_key_used":      api_key,
+        "day_info":          day_info,
+        "_event_ids":        event_ids,
         # Rebuild ingredients (no re-fetch needed)
-        "_players_by_day": players_by_day,
-        "_dyn_fixed":      dyn_fixed,
-        "_buddy_groups":   buddy_groups,
-        "_buddy_char":     buddy_char,
-        "_avoid_pairs":    avoid_pairs,
-        "_fixed_raw":      fixed_raw,
+        "_players_by_day":   players_by_day,
+        "_dyn_fixed":        dyn_fixed,
+        "_buddy_groups":     buddy_groups,
+        "_buddy_char":       buddy_char,
+        "_avoid_pairs":      avoid_pairs,
+        "_fixed_raw":        fixed_raw,
     })
     st.rerun()
 
@@ -1040,7 +1107,7 @@ if "results" in st.session_state and st.session_state.get("enable_parse_group"):
         with col_btn:
             if st.button("🔄 Apply", width='stretch',
                          help="Recalculate with current Parse Group settings"):
-                _new = build_all_raids(
+                _new, _new_slot_map = build_all_raids(
                     st.session_state["_players_by_day"],
                     st.session_state["_dyn_fixed"],
                     st.session_state["_buddy_groups"],
@@ -1048,9 +1115,11 @@ if "results" in st.session_state and st.session_state.get("enable_parse_group"):
                     st.session_state["_avoid_pairs"],
                     _pg_sel,
                     _pg_boost,
-                    st.session_state.get("_buddy_char",{}),
+                    st.session_state.get("_buddy_char", {}),
+                    st.session_state.get("_event_ids"),
                 )
                 st.session_state["results"] = _new
+                st.session_state["slot_event_id_map"] = _new_slot_map
                 st.rerun()
 
 # ── STEP 3
@@ -1318,9 +1387,12 @@ if st.session_state.get("push_confirm"):
             if st.button("✅  Yes, push all", width='stretch'):
                 st.session_state["push_confirm"] = False
                 errors, successes, comp_links = [], [], []
-                for i,label in enumerate([k for k in edited_groups if "Bench" not in k]):
-                    if i >= len(sel_events): break
-                    eid = str(sel_events[i].get("id",""))
+                _slot_map = st.session_state.get("slot_event_id_map", {})
+                for label in [k for k in edited_groups if "Bench" not in k]:
+                    eid = _slot_map.get(label, "")
+                    if not eid:
+                        errors.append(f"{label}: kein Event-ID gefunden — bitte neu berechnen")
+                        continue
                     # Use edited_groups so manual changes are reflected in push
                     pdicts = [{
                                   "name":       r.get("Name", ""),
