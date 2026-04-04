@@ -615,6 +615,7 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
                     day_info: dict | None = None, avoid_pairs: list | None = None,
                     parse_group_label: str = "", parse_boost: int = 0,
                     buddy_char: dict | None = None, min_raids: int = 0,
+                    force_split: bool = False,
                     event_ids: dict | None = None) -> tuple:
     if day_info is None:
         day_info = {i:(DAY_EMOJI[i] if i<3 else "📅", DAY_LABELS[i] if i<3 else f"Day {i}") for i in range(3)}
@@ -709,13 +710,15 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         if not bumped: break
 
     # Apply min_raids override — bump the global total up to the requested minimum by
-    # adding raids to the busiest day first. Tank/Healer cap per day stays as guardrail.
+    # adding raids to the busiest day first.
+    # force_split=True: ignore tank/healer cap and always reach the target.
+    # force_split=False: tank/healer cap per day stays as guardrail.
     if min_raids > 1:
         while sum(raids_per_day.values()) < min_raids:
             best = None
             for d in sorted(all_day_idxs, key=lambda d: -raw_count.get(d, 0)):
-                hard_cap = min(tank_avail.get(d, 0), heal_avail.get(d, 0) // 2, MAX_RAIDS)
-                if raids_per_day.get(d, 0) < hard_cap:
+                per_day_cap = MAX_RAIDS if force_split else min(tank_avail.get(d, 0), heal_avail.get(d, 0) // 2, MAX_RAIDS)
+                if raids_per_day.get(d, 0) < per_day_cap:
                     best = d
                     break
             if best is None:
@@ -1037,6 +1040,17 @@ with st.sidebar:
              "Override: force at least this many raids. Tank/Healer availability still limits the maximum."
     )
     min_raids_val = 0 if min_raids_sel == "Auto" else int(min_raids_sel)
+    if min_raids_val > 1:
+        force_split_val = st.checkbox(
+            f"Tanks & Healer auf {min_raids_val} Raids aufteilen",
+            value=False,
+            key="force_split_val",
+            help="Ignoriert das Tank/Healer-Limit und erzwingt die gewählte Raidanzahl.\n"
+                 "Tanks und Healer werden so dünn wie nötig auf alle Gruppen verteilt.\n"
+                 "Nur aktivieren wenn ihr wisst was ihr tut."
+        )
+    else:
+        force_split_val = False
 
     # ── Parse Group
     st.markdown("---")
@@ -1172,7 +1186,7 @@ if st.button("⚔️  Calculate Raid Compositions", width='stretch'):
     event_ids = {idx: str(ev.get("id","")) for idx, ev in enumerate(selected_events)}
     results, slot_event_id_map = build_all_raids(
         players_by_day, dyn_fixed, buddy_groups, day_info, avoid_pairs,
-        _pg_label, _pg_boost, buddy_char, min_raids_val, event_ids)
+        _pg_label, _pg_boost, buddy_char, min_raids_val, force_split_val, event_ids)
     # Store everything needed for live-rebuild when parse settings change
     st.session_state.update({
         "results":           results,
@@ -1218,6 +1232,7 @@ if "results" in st.session_state and st.session_state.get("enable_parse_group"):
                     _pg_boost,
                     st.session_state.get("_buddy_char", {}),
                     0 if st.session_state.get("min_raids_sel", "Auto") == "Auto" else int(st.session_state.get("min_raids_sel", "0")),
+                    st.session_state.get("force_split_val", False),
                     st.session_state.get("_event_ids"),
                 )
                 st.session_state["results"] = _new
