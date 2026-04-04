@@ -614,7 +614,7 @@ def _avoid_conflict(player: Player, group: list, avoid_pairs: list) -> bool:
 def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups: list,
                     day_info: dict | None = None, avoid_pairs: list | None = None,
                     parse_group_label: str = "", parse_boost: int = 0,
-                    buddy_char: dict | None = None,
+                    buddy_char: dict | None = None, min_raids: int = 0,
                     event_ids: dict | None = None) -> tuple:
     if day_info is None:
         day_info = {i:(DAY_EMOJI[i] if i<3 else "📅", DAY_LABELS[i] if i<3 else f"Day {i}") for i in range(3)}
@@ -707,6 +707,20 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             if raids_per_day.get(d, 0) < cap and raw_count.get(d, 0) >= 10:
                 raids_per_day[d] += 1; total += 1; bumped = True
         if not bumped: break
+
+    # Apply min_raids override — bump the global total up to the requested minimum by
+    # adding raids to the busiest day first. Tank/Healer cap per day stays as guardrail.
+    if min_raids > 1:
+        while sum(raids_per_day.values()) < min_raids:
+            best = None
+            for d in sorted(all_day_idxs, key=lambda d: -raw_count.get(d, 0)):
+                hard_cap = min(tank_avail.get(d, 0), heal_avail.get(d, 0) // 2, MAX_RAIDS)
+                if raids_per_day.get(d, 0) < hard_cap:
+                    best = d
+                    break
+            if best is None:
+                break
+            raids_per_day[best] += 1
 
     # Build slot labels — detect duplicate day names and add sequence suffix
     # so two Monday-events don't produce identical labels (dict-key collision).
@@ -1014,6 +1028,15 @@ with st.sidebar:
         help="When ON: only players with status primary/confirmed/spec are included.\n"
              "When OFF: also includes late, tentative and standby sign-ups."
     )
+    min_raids_sel = st.selectbox(
+        "Min. Raids",
+        options=["Auto", "1", "2", "3"],
+        index=0,
+        key="min_raids_sel",
+        help="Auto: threshold-based (≥18 sign-ups → 2 raids, ≥27 → 3 raids).\n"
+             "Override: force at least this many raids. Tank/Healer availability still limits the maximum."
+    )
+    min_raids_val = 0 if min_raids_sel == "Auto" else int(min_raids_sel)
 
     # ── Parse Group
     st.markdown("---")
@@ -1149,7 +1172,7 @@ if st.button("⚔️  Calculate Raid Compositions", width='stretch'):
     event_ids = {idx: str(ev.get("id","")) for idx, ev in enumerate(selected_events)}
     results, slot_event_id_map = build_all_raids(
         players_by_day, dyn_fixed, buddy_groups, day_info, avoid_pairs,
-        _pg_label, _pg_boost, buddy_char, event_ids)
+        _pg_label, _pg_boost, buddy_char, min_raids_val, event_ids)
     # Store everything needed for live-rebuild when parse settings change
     st.session_state.update({
         "results":           results,
@@ -1194,6 +1217,7 @@ if "results" in st.session_state and st.session_state.get("enable_parse_group"):
                     _pg_sel,
                     _pg_boost,
                     st.session_state.get("_buddy_char", {}),
+                    0 if st.session_state.get("min_raids_sel", "Auto") == "Auto" else int(st.session_state.get("min_raids_sel", "0")),
                     st.session_state.get("_event_ids"),
                 )
                 st.session_state["results"] = _new
