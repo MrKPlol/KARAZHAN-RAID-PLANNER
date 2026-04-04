@@ -1042,12 +1042,12 @@ with st.sidebar:
     min_raids_val = 0 if min_raids_sel == "Auto" else int(min_raids_sel)
     if min_raids_val > 1:
         force_split_val = st.checkbox(
-            f"Tanks & Healer auf {min_raids_val} Raids aufteilen",
+            f"Distribute Tanks & Healers across {min_raids_val} raids",
             value=False,
             key="force_split_val",
-            help="Ignoriert das Tank/Healer-Limit und erzwingt die gewählte Raidanzahl.\n"
-                 "Tanks und Healer werden so dünn wie nötig auf alle Gruppen verteilt.\n"
-                 "Nur aktivieren wenn ihr wisst was ihr tut."
+            help="Ignores the tank/healer limit and enforces the selected number of raids.\n"
+                 "Tanks and healers will be spread as thin as needed across all groups.\n"
+                 "Only enable this if you know what you are doing."
         )
     else:
         force_split_val = False
@@ -1450,7 +1450,7 @@ if keys_to_export:
 
                 # Determine labels based on tank type
                 tank_p = next((p for p in export_players if p.role=="Tank"), None)
-                is_pala_tank = tank_p and tank_p.class_name.lower()=="paladin"
+                is_pala_tank = bool(tank_p and _is_prot_pala(tank_p))
                 sg1_title = "🔷 Group 1 — Casters" if is_pala_tank else "🔷 Group 1 — Melee"
                 sg2_title = "🔶 Group 2 — Melee"   if is_pala_tank else "🔶 Group 2 — Casters"
 
@@ -1508,7 +1508,7 @@ if st.session_state.get("push_confirm"):
                 for label in [k for k in edited_groups if "Bench" not in k]:
                     eid = _slot_map.get(label, "")
                     if not eid:
-                        errors.append(f"{label}: kein Event-ID — bitte neu berechnen")
+                        errors.append(f"{label}: no event ID — please recalculate")
                         continue
                     # Use edited_groups so manual changes are reflected in push
                     pdicts = [{
