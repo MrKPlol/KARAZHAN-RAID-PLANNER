@@ -429,19 +429,23 @@ def fetch_event_detail(event_id: str, api_key: str) -> dict:
     except Exception as e:
         st.error(f"Network: {e}"); return {}
 
-def push_composition(event_id: str, api_key: str, players: list) -> tuple:
+def push_composition(event_id: str, api_key: str, players: list, group_count: int = 2) -> tuple:
     """
-    PATCH /api/v3/comps/COMPID
-    Comp ID = Event ID (confirmed from Raid-Helper JSON structure).
-    Payload: {"slots": [{name, className, specName, isConfirmed, groupNumber, slotNumber}]}
-    groupNumber 1 = SG1 (Casters), groupNumber 2 = SG2 (Melee)
+    PATCH /api/v4/comps/COMPID
+    players: dicts with keys name, class_name, spec, subgroup (1/2), group_offset (0 for A, 2 for B).
+    groupNumber = group_offset + subgroup  →  A: 1+2, B: 3+4
+    group_count: total groups in comp (2 for single raid, 4 for A/B split).
     """
     url   = f"{API_BASE}/v4/comps/{event_id}"
     slots = []
-    sg1   = [p for p in players if p.get("subgroup", 1) == 1]
-    sg2   = [p for p in players if p.get("subgroup", 1) == 2]
-    for group_num, grp in enumerate([sg1, sg2], 1):
-        for slot_num, p in enumerate(grp, 1):
+    # Collect per effective group, preserving insertion order for slot numbering
+    from collections import defaultdict
+    by_group: dict = defaultdict(list)
+    for p in players:
+        group_num = p.get("group_offset", 0) + p.get("subgroup", 1)
+        by_group[group_num].append(p)
+    for group_num in sorted(by_group):
+        for slot_num, p in enumerate(by_group[group_num], 1):
             slots.append({
                 "name":        p.get("name", ""),
                 "className":   p.get("class_name", p.get("className", "")),
@@ -452,7 +456,7 @@ def push_composition(event_id: str, api_key: str, players: list) -> tuple:
             })
     try:
         r = requests.patch(url, headers=_headers(api_key),
-                           json={"slots": slots}, timeout=15)
+                           json={"slots": slots, "groupCount": group_count}, timeout=15)
         r.raise_for_status()
         return True, "Success"
     except requests.HTTPError as e:
@@ -1505,24 +1509,38 @@ if st.session_state.get("push_confirm"):
                 st.session_state["push_confirm"] = False
                 errors, successes, comp_links = [], [], []
                 _slot_map = st.session_state.get("slot_event_id_map", {})
-                for label in [k for k in edited_groups if "Bench" not in k]:
+                raid_labels = [k for k in edited_groups if "Bench" not in k]
+
+                # Group raid labels by their event_id so that A/B splits land in
+                # the same comp (A → groups 1+2, B → groups 3+4).
+                eid_label_map: dict = {}
+                for label in raid_labels:
                     eid = _slot_map.get(label, "")
                     if not eid:
                         errors.append(f"{label}: no event ID — please recalculate")
                         continue
-                    # Use edited_groups so manual changes are reflected in push
-                    pdicts = [{
-                                  "name":       r.get("Name", ""),
-                                  "class_name": r.get("Class", "").lower(),
-                                  "spec":       r.get("Spec", ""),
-                                  "subgroup":   int(r.get("SG", 1)),
-                              } for r in edited_groups.get(label, [])]
-                    ok,msg = push_composition(eid, api_key_sess, pdicts)
+                    eid_label_map.setdefault(eid, []).append(label)
+
+                for eid, labels in eid_label_map.items():
+                    pdicts = []
+                    for i, label in enumerate(labels):
+                        group_offset = i * 2   # A→0, B→2, C→4
+                        for r in edited_groups.get(label, []):
+                            pdicts.append({
+                                "name":         r.get("Name", ""),
+                                "class_name":   r.get("Class", "").lower(),
+                                "spec":         r.get("Spec", ""),
+                                "subgroup":     int(r.get("SG", 1)),
+                                "group_offset": group_offset,
+                            })
+                    group_count = len(labels) * 2
+                    ok, msg = push_composition(eid, api_key_sess, pdicts, group_count)
+                    label_str = " + ".join(labels)
                     if ok:
-                        successes.append(label)
-                        comp_links.append((label, eid))
+                        successes.append(label_str)
+                        comp_links.append((label_str, eid))
                     else:
-                        errors.append(f"{label}: {msg}")
+                        errors.append(f"{label_str}: {msg}")
                 if successes:
                     st.markdown(f'<div class="sb">✅ Pushed: {", ".join(successes)}</div>', unsafe_allow_html=True)
                     for lbl, eid in comp_links:
