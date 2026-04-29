@@ -649,10 +649,11 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
     all_players = list(seen.values())
     for p in all_players: p.assigned=False; p.group_key=""; p.subgroup=1
 
-    # Fixed assignments still match by name (case-insensitive)
+    # Fixed assignments match by name — only apply when the forced day is one
+    # the player actually signed up for, so alts on other days are unaffected.
     for name_lower,forced_day in fixed_assignments.items():
         for p in all_players:
-            if p.name_lower == name_lower:
+            if p.name_lower == name_lower and forced_day in p.avail_days:
                 p.avail_days = [forced_day]
 
     for bset in buddy_groups:
@@ -869,7 +870,8 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
                     if _free(lbl) <= 0: continue
                     if sum(1 for x in results[lbl] if x.role==role) >= target_count: continue
                     if strict_avoid and _avoid_conflict(p, results[lbl], avoid_pairs): continue
-                    if buddy_slot_pre.get(p.name_lower, lbl) != lbl: continue
+                    bp = buddy_slot_pre.get(p.name_lower)
+                    if bp and bp in day_slot_lbls and bp != lbl: continue
                     results[lbl].append(p); p.assigned=True; p.group_key=lbl
                     placed = True; break
                 if placed: break
