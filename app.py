@@ -863,7 +863,7 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
             def _slot_pref(lbl):
                 cls_cnt  = sum(1 for x in results[lbl] if x.class_name.lower() == p.class_name.lower())
                 role_cnt = sum(1 for x in results[lbl] if x.role == role)
-                return (cls_cnt, role_cnt, day_slot_lbls.index(lbl))
+                return (cls_cnt, role_cnt, _cur_score(lbl), day_slot_lbls.index(lbl))
 
             for strict_avoid in (True, False):
                 for lbl in sorted(day_slot_lbls, key=_slot_pref):
