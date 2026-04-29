@@ -536,7 +536,7 @@ def parse_signups(event_data: dict, day_idx: int, strict: bool, role_overrides: 
         spec = str(s.get("specName") or s.get("spec") or "").strip()
         role = _extract_role(s)
         ov   = role_overrides.get(name.lower().strip())
-        if ov: role = ov
+        if ov and _override_class_valid(ov, cls): role = ov
         if cls == "tank":
             real_cls = RAIDHELPER_TANK_SPEC_TO_CLASS.get(spec.lower().strip())
             if real_cls: cls = real_cls
@@ -608,6 +608,14 @@ def parse_buddy_char(raw: str) -> dict:
 
 
 # ── ALGORITHM
+_TANK_CAPABLE   = {"warrior", "paladin", "druid", "death knight", "dk"}
+_HEALER_CAPABLE = {"priest", "paladin", "druid", "shaman"}
+
+def _override_class_valid(override_role: str, cls: str) -> bool:
+    if override_role == "Tank":   return cls in _TANK_CAPABLE
+    if override_role == "Healer": return cls in _HEALER_CAPABLE
+    return True
+
 def _avoid_conflict(player: Player, group: list, avoid_pairs: list) -> bool:
     names = {p.name_lower for p in group}
     for pair in avoid_pairs:
@@ -786,14 +794,18 @@ def build_all_raids(players_by_day: dict, fixed_assignments: dict, buddy_groups:
         avail_slots = [(di, lbl) for di, lbl in slot_labels if di in common_days]
         if not avail_slots: continue
         bp_roles = {p.role for p in bps}
-        # Prefer a slot that has no role conflict (especially Tank) with other buddy groups
-        chosen = avail_slots[0][1]
-        for _, lbl in avail_slots:
-            already = _slot_roles_claimed.get(lbl, set())
-            if not (already & bp_roles):  # no role overlap
-                chosen = lbl
-                break
-        _slot_roles_claimed.setdefault(chosen, set()).update(bp_roles)
+        # Only Tank/Healer roles create real conflicts between buddy groups.
+        # DPS is excluded so DPS-only groups don't false-conflict on every slot.
+        bp_th = bp_roles & {"Tank", "Healer"}
+
+        def _buddy_load(lbl):
+            return sum(1 for v in buddy_slot_pre.values() if v == lbl)
+
+        no_conflict = [(di, lbl) for di, lbl in avail_slots
+                       if not (_slot_roles_claimed.get(lbl, set()) & bp_th)]
+        source = no_conflict if no_conflict else avail_slots
+        chosen = min(source, key=lambda x: _buddy_load(x[1]))[1]
+        _slot_roles_claimed.setdefault(chosen, set()).update(bp_th)
         for bp in bps:
             if bp.name_lower not in buddy_slot_pre:
                 buddy_slot_pre[bp.name_lower] = chosen
